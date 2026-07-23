@@ -20,6 +20,9 @@ class Producteur(db.Model):
     type_production = db.Column(db.String(50))  # cereales, elevage, maraichage, transforme
     description = db.Column(db.Text)
 
+    photo_url = db.Column(db.String(255))
+    histoire = db.Column(db.Text)
+
     actif = db.Column(db.Boolean, default=True)
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -35,6 +38,8 @@ class Producteur(db.Model):
             "zone_livraison": self.zone_livraison,
             "type_production": self.type_production,
             "description": self.description,
+            "photo_url": self.photo_url,
+            "histoire": self.histoire,
             "actif": self.actif,
             "date_inscription": self.date_inscription.isoformat(),
             "nombre_produits": len(self.produits),
@@ -66,6 +71,8 @@ class Produit(db.Model):
             "producteur_nom": self.producteur.nom if self.producteur else None,
             "producteur_ville": self.producteur.ville if self.producteur else None,
             "producteur_pays": self.producteur.pays if self.producteur else None,
+            "producteur_photo_url": self.producteur.photo_url if self.producteur else None,
+            "producteur_histoire": self.producteur.histoire if self.producteur else None,
             "nom": self.nom,
             "categorie": self.categorie,
             "prix_unitaire": self.prix_unitaire,
