@@ -1,10 +1,12 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
-from models import db, Producteur, Produit, Acheteur, Commande, Message, Avis
+from models import db, Producteur, Produit, Acheteur, Commande, Message, Avis, Favori
 import os
 import re
 import json
+import secrets
+import urllib.request
 
 app = Flask(__name__)
 CORS(app)
@@ -22,6 +24,14 @@ PAYS_AUTORISES = ["Côte d'Ivoire", "Mali", "Burkina Faso", "Sénégal"]
 CATEGORIES = ["cereales", "elevage", "maraichage", "transforme"]
 STATUTS_COMMANDE = ["en_attente", "confirmee_producteur", "livree", "terminee", "annulee"]
 
+LABELS_STATUT_COMMANDE = {
+    "en_attente": "En attente",
+    "confirmee_producteur": "Confirmée par le vendeur",
+    "livree": "Livrée",
+    "terminee": "Terminée",
+    "annulee": "Annulée",
+}
+
 # Clé secrète d'accès au dashboard admin.
 # IMPORTANT : change cette valeur par défaut via une variable d'environnement
 # ADMIN_KEY sur Render (Settings > Environment), pour ne pas garder la valeur devinable.
@@ -30,6 +40,37 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "agromarket_admin_2026")
 
 def cle_admin_valide(req):
     return req.headers.get("X-Admin-Key") == ADMIN_KEY
+
+
+def generer_code_parrainage():
+    """Génère un code de parrainage court et unique."""
+    while True:
+        code = secrets.token_hex(3).upper()  # 6 caractères
+        if not Producteur.query.filter_by(code_parrainage=code).first():
+            return code
+
+
+def envoyer_notification_push(token, titre, corps, donnees=None):
+    """Envoie une notification push via le service Expo. Échoue silencieusement
+    pour ne jamais bloquer la requête principale si le token est absent/invalide."""
+    if not token:
+        return
+    payload = {
+        "to": token,
+        "title": titre,
+        "body": corps,
+        "data": donnees or {},
+    }
+    try:
+        req = urllib.request.Request(
+            "https://exp.host/--/api/v2/push/send",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
 
 
 # ---------- FILTRE ANTI-CONTOURNEMENT ----------
@@ -79,6 +120,9 @@ def inscription_producteur():
     if Producteur.query.filter_by(telephone=data["telephone"]).first():
         return jsonify({"erreur": "Ce numéro de téléphone est déjà enregistré"}), 409
 
+    code_saisi = (data.get("code_parrain_utilise") or "").strip().upper()
+    parrain = Producteur.query.filter_by(code_parrainage=code_saisi).first() if code_saisi else None
+
     producteur = Producteur(
         nom=data["nom"],
         telephone=data["telephone"],
@@ -90,9 +134,15 @@ def inscription_producteur():
         description=data.get("description", ""),
         photo_url=data.get("photo_url", ""),
         histoire=data.get("histoire", ""),
+        code_parrainage=generer_code_parrainage(),
+        code_parrain_utilise=code_saisi if parrain else None,
     )
     db.session.add(producteur)
     db.session.commit()
+
+    if parrain:
+        parrain.nombre_filleuls = (parrain.nombre_filleuls or 0) + 1
+        db.session.commit()
 
     return jsonify({"message": "Compte producteur créé", "producteur": producteur.to_dict()}), 201
 
@@ -137,6 +187,15 @@ def lister_producteurs():
     return jsonify([p.to_dict() for p in producteurs])
 
 
+@app.route("/api/producteurs/<int:producteur_id>/push-token", methods=["PUT"])
+def enregistrer_push_token_producteur(producteur_id):
+    producteur = Producteur.query.get_or_404(producteur_id)
+    data = request.get_json()
+    producteur.push_token = data.get("push_token", "")
+    db.session.commit()
+    return jsonify({"message": "Jeton enregistré"})
+
+
 # ---------- AVIS ET NOTES VENDEURS ----------
 
 @app.route("/api/producteurs/<int:producteur_id>/avis", methods=["POST"])
@@ -172,6 +231,43 @@ def lister_avis(producteur_id):
     Producteur.query.get_or_404(producteur_id)
     avis = Avis.query.filter_by(producteur_id=producteur_id).order_by(Avis.date_avis.desc()).all()
     return jsonify([a.to_dict() for a in avis])
+
+
+# ---------- FAVORIS ----------
+
+@app.route("/api/acheteurs/<int:acheteur_id>/favoris", methods=["GET"])
+def lister_favoris(acheteur_id):
+    Acheteur.query.get_or_404(acheteur_id)
+    favoris = Favori.query.filter_by(acheteur_id=acheteur_id).all()
+    return jsonify([f.produit.to_dict() for f in favoris if f.produit])
+
+
+@app.route("/api/acheteurs/<int:acheteur_id>/favoris", methods=["POST"])
+def ajouter_favori(acheteur_id):
+    Acheteur.query.get_or_404(acheteur_id)
+    data = request.get_json()
+    produit_id = data.get("produit_id")
+    if not produit_id:
+        return jsonify({"erreur": "produit_id requis"}), 400
+    Produit.query.get_or_404(produit_id)
+
+    existant = Favori.query.filter_by(acheteur_id=acheteur_id, produit_id=produit_id).first()
+    if existant:
+        return jsonify({"message": "Déjà en favoris"}), 200
+
+    favori = Favori(acheteur_id=acheteur_id, produit_id=produit_id)
+    db.session.add(favori)
+    db.session.commit()
+    return jsonify({"message": "Ajouté aux favoris"}), 201
+
+
+@app.route("/api/acheteurs/<int:acheteur_id>/favoris/<int:produit_id>", methods=["DELETE"])
+def retirer_favori(acheteur_id, produit_id):
+    favori = Favori.query.filter_by(acheteur_id=acheteur_id, produit_id=produit_id).first()
+    if favori:
+        db.session.delete(favori)
+        db.session.commit()
+    return jsonify({"message": "Retiré des favoris"})
 
 
 # ---------- PRODUITS ----------
@@ -303,6 +399,15 @@ def connexion_acheteur():
     return jsonify({"message": "Connexion réussie", "acheteur": acheteur.to_dict()}), 200
 
 
+@app.route("/api/acheteurs/<int:acheteur_id>/push-token", methods=["PUT"])
+def enregistrer_push_token_acheteur(acheteur_id):
+    acheteur = Acheteur.query.get_or_404(acheteur_id)
+    data = request.get_json()
+    acheteur.push_token = data.get("push_token", "")
+    db.session.commit()
+    return jsonify({"message": "Jeton enregistré"})
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
@@ -319,7 +424,7 @@ def creer_commande():
     if manquants:
         return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
 
-    Acheteur.query.get_or_404(data["acheteur_id"])
+    acheteur = Acheteur.query.get_or_404(data["acheteur_id"])
     produit = Produit.query.get_or_404(data["produit_id"])
 
     quantite = data["quantite"]
@@ -340,6 +445,13 @@ def creer_commande():
     commande.calculer_montants()
     db.session.add(commande)
     db.session.commit()
+
+    if produit.producteur:
+        envoyer_notification_push(
+            produit.producteur.push_token,
+            "Nouvelle commande reçue",
+            f"{acheteur.nom} a commandé {produit.nom}",
+        )
 
     return jsonify({"message": "Commande créée", "commande": commande.to_dict()}), 201
 
@@ -378,6 +490,16 @@ def modifier_statut_commande(commande_id):
 
     commande.statut = nouveau_statut
     db.session.commit()
+
+    if commande.acheteur:
+        label = LABELS_STATUT_COMMANDE.get(nouveau_statut, nouveau_statut)
+        nom_produit = commande.produit.nom if commande.produit else "ta commande"
+        envoyer_notification_push(
+            commande.acheteur.push_token,
+            "Mise à jour de ta commande",
+            f"{nom_produit} : {label}",
+        )
+
     return jsonify({"message": "Statut mis à jour", "commande": commande.to_dict()})
 
 
@@ -395,8 +517,8 @@ def envoyer_message():
     if data["expediteur_type"] not in ("acheteur", "producteur"):
         return jsonify({"erreur": "expediteur_type doit être 'acheteur' ou 'producteur'"}), 400
 
-    Acheteur.query.get_or_404(data["acheteur_id"])
-    Producteur.query.get_or_404(data["producteur_id"])
+    acheteur = Acheteur.query.get_or_404(data["acheteur_id"])
+    producteur = Producteur.query.get_or_404(data["producteur_id"])
 
     contenu_filtre, contient_infraction = filtrer_message(data["contenu"])
 
@@ -411,6 +533,12 @@ def envoyer_message():
     )
     db.session.add(message)
     db.session.commit()
+
+    apercu = contenu_filtre[:80]
+    if data["expediteur_type"] == "acheteur":
+        envoyer_notification_push(producteur.push_token, f"Message de {acheteur.nom}", apercu)
+    else:
+        envoyer_notification_push(acheteur.push_token, f"Message de {producteur.nom}", apercu)
 
     reponse = {"message": message.to_dict()}
     if contient_infraction:
