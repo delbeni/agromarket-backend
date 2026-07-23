@@ -4,6 +4,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from models import db, Producteur, Produit, Acheteur, Commande, Message
 import os
 import re
+import json
 
 app = Flask(__name__)
 CORS(app)
@@ -140,6 +141,12 @@ def ajouter_produit(producteur_id):
     if data["categorie"] not in CATEGORIES:
         return jsonify({"erreur": f"Catégorie invalide. Options: {', '.join(CATEGORIES)}"}), 400
 
+    photos_urls = data.get("photos_urls", [])
+    if not isinstance(photos_urls, list):
+        photos_urls = []
+    photos_urls = photos_urls[:4]  # limite à 4 photos
+    photo_couverture = photos_urls[0] if photos_urls else data.get("photo_url", "")
+
     produit = Produit(
         producteur_id=producteur_id,
         nom=data["nom"],
@@ -147,7 +154,9 @@ def ajouter_produit(producteur_id):
         prix_unitaire=data["prix_unitaire"],
         unite=data.get("unite", "unité"),
         quantite_disponible=data["quantite_disponible"],
-        photo_url=data.get("photo_url", ""),
+        photo_url=photo_couverture,
+        photos_urls=json.dumps(photos_urls),
+        video_url=data.get("video_url", ""),
         description=data.get("description", ""),
     )
     db.session.add(produit)
@@ -168,7 +177,16 @@ def modifier_produit(produit_id):
     produit = Produit.query.get_or_404(produit_id)
     data = request.get_json()
 
-    for champ in ["nom", "prix_unitaire", "unite", "quantite_disponible", "photo_url", "description", "actif"]:
+    if "photos_urls" in data:
+        photos_urls = data["photos_urls"]
+        if not isinstance(photos_urls, list):
+            photos_urls = []
+        photos_urls = photos_urls[:4]
+        produit.photos_urls = json.dumps(photos_urls)
+        if photos_urls:
+            produit.photo_url = photos_urls[0]
+
+    for champ in ["nom", "prix_unitaire", "unite", "quantite_disponible", "photo_url", "video_url", "description", "actif"]:
         if champ in data:
             setattr(produit, champ, data[champ])
 
