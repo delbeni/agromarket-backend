@@ -25,6 +25,12 @@ class Producteur(db.Model):
 
     verifie = db.Column(db.Boolean, default=False)  # badge "vendeur vérifié", accordé par l'admin
 
+    code_parrainage = db.Column(db.String(10), unique=True)  # code à partager
+    code_parrain_utilise = db.Column(db.String(10))  # code d'un autre producteur, saisi à l'inscription
+    nombre_filleuls = db.Column(db.Integer, default=0)
+
+    push_token = db.Column(db.String(255))  # jeton Expo pour notifications push
+
     actif = db.Column(db.Boolean, default=True)
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -46,6 +52,8 @@ class Producteur(db.Model):
             "photo_url": self.photo_url,
             "histoire": self.histoire,
             "verifie": self.verifie,
+            "code_parrainage": self.code_parrainage,
+            "nombre_filleuls": self.nombre_filleuls,
             "actif": self.actif,
             "date_inscription": self.date_inscription.isoformat(),
             "nombre_produits": len(self.produits),
@@ -119,6 +127,8 @@ class Acheteur(db.Model):
     ville = db.Column(db.String(100), nullable=False)
     adresse_livraison = db.Column(db.String(255))
 
+    push_token = db.Column(db.String(255))  # jeton Expo pour notifications push
+
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -186,6 +196,23 @@ class Avis(db.Model):
             "commentaire": self.commentaire,
             "date_avis": self.date_avis.isoformat(),
         }
+
+
+class Favori(db.Model):
+    """Produit ajouté aux favoris par un acheteur."""
+    __tablename__ = "favoris"
+
+    id = db.Column(db.Integer, primary_key=True)
+    acheteur_id = db.Column(db.Integer, db.ForeignKey("acheteurs.id"), nullable=False)
+    produit_id = db.Column(db.Integer, db.ForeignKey("produits.id"), nullable=False)
+
+    date_ajout = db.Column(db.DateTime, default=datetime.utcnow)
+
+    produit = db.relationship("Produit")
+
+    __table_args__ = (
+        db.UniqueConstraint("acheteur_id", "produit_id", name="uq_favori_acheteur_produit"),
+    )
 
 
 class Commande(db.Model):
