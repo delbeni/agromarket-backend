@@ -76,6 +76,8 @@ def inscription_producteur():
         zone_livraison=data.get("zone_livraison", ""),
         type_production=data.get("type_production", ""),
         description=data.get("description", ""),
+        photo_url=data.get("photo_url", ""),
+        histoire=data.get("histoire", ""),
     )
     db.session.add(producteur)
     db.session.commit()
@@ -105,7 +107,7 @@ def modifier_producteur(producteur_id):
     producteur = Producteur.query.get_or_404(producteur_id)
     data = request.get_json()
 
-    for champ in ["nom", "pays", "ville", "zone_livraison", "type_production", "description"]:
+    for champ in ["nom", "pays", "ville", "zone_livraison", "type_production", "description", "photo_url", "histoire"]:
         if champ in data:
             setattr(producteur, champ, data[champ])
 
