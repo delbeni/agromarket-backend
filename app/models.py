@@ -17,6 +17,9 @@ class Producteur(db.Model):
     ville = db.Column(db.String(100), nullable=False)
     zone_livraison = db.Column(db.String(255))  # ex: "Abidjan - Cocody, Yopougon"
 
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+
     type_production = db.Column(db.String(50))  # cereales, elevage, maraichage, transforme
     description = db.Column(db.Text)
 
@@ -47,6 +50,8 @@ class Producteur(db.Model):
             "pays": self.pays,
             "ville": self.ville,
             "zone_livraison": self.zone_livraison,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
             "type_production": self.type_production,
             "description": self.description,
             "photo_url": self.photo_url,
@@ -70,7 +75,7 @@ class Produit(db.Model):
     producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
 
     nom = db.Column(db.String(150), nullable=False)
-    categorie = db.Column(db.String(50), nullable=False)  # cereales, elevage, maraichage, transforme
+    categorie = db.Column(db.String(50), nullable=False)  # cereales, elevage, maraichage, transforme, restaurant, autre
     prix_unitaire = db.Column(db.Float, nullable=False)  # en FCFA
     unite = db.Column(db.String(20), default="unité")  # kg, sac, unité, litre
     quantite_disponible = db.Column(db.Float, nullable=False, default=0)
@@ -101,6 +106,8 @@ class Produit(db.Model):
             "producteur_verifie": self.producteur.verifie if self.producteur else False,
             "producteur_note_moyenne": note_moyenne,
             "producteur_nombre_avis": len(notes),
+            "producteur_latitude": self.producteur.latitude if self.producteur else None,
+            "producteur_longitude": self.producteur.longitude if self.producteur else None,
             "nom": self.nom,
             "categorie": self.categorie,
             "prix_unitaire": self.prix_unitaire,
@@ -127,6 +134,9 @@ class Acheteur(db.Model):
     ville = db.Column(db.String(100), nullable=False)
     adresse_livraison = db.Column(db.String(255))
 
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+
     push_token = db.Column(db.String(255))  # jeton Expo pour notifications push
 
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
@@ -139,6 +149,42 @@ class Acheteur(db.Model):
             "pays": self.pays,
             "ville": self.ville,
             "adresse_livraison": self.adresse_livraison,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+        }
+
+
+class Livreur(db.Model):
+    """Compte transporteur / coursier."""
+    __tablename__ = "livreurs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(120), nullable=False)
+    telephone = db.Column(db.String(20), unique=True, nullable=False)
+    mot_de_passe_hash = db.Column(db.String(255), nullable=False)
+
+    pays = db.Column(db.String(50), nullable=False, default="Côte d'Ivoire")
+    ville = db.Column(db.String(100), nullable=False)
+    vehicule = db.Column(db.String(50))  # moto, voiture, tricycle, à pied...
+
+    push_token = db.Column(db.String(255))
+
+    actif = db.Column(db.Boolean, default=True)
+    date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
+
+    livraisons = db.relationship("Commande", backref="livreur", lazy=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "nom": self.nom,
+            "telephone": self.telephone,
+            "pays": self.pays,
+            "ville": self.ville,
+            "vehicule": self.vehicule,
+            "actif": self.actif,
+            "date_inscription": self.date_inscription.isoformat(),
+            "nombre_livraisons": len([c for c in self.livraisons if c.statut in ("livree", "terminee")]),
         }
 
 
@@ -215,6 +261,33 @@ class Favori(db.Model):
     )
 
 
+class TicketSupport(db.Model):
+    """Message envoyé par un utilisateur au support client."""
+    __tablename__ = "tickets_support"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(120), nullable=False)
+    telephone = db.Column(db.String(20), nullable=False)
+    sujet = db.Column(db.String(150))
+    message = db.Column(db.Text, nullable=False)
+    type_compte = db.Column(db.String(20))  # "producteur", "acheteur", "livreur" ou "visiteur"
+
+    statut = db.Column(db.String(20), default="ouvert")  # "ouvert" ou "traite"
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "nom": self.nom,
+            "telephone": self.telephone,
+            "sujet": self.sujet,
+            "message": self.message,
+            "type_compte": self.type_compte,
+            "statut": self.statut,
+            "date_creation": self.date_creation.isoformat(),
+        }
+
+
 class Commande(db.Model):
     """Commande passée par un acheteur pour un produit."""
     __tablename__ = "commandes"
@@ -222,6 +295,9 @@ class Commande(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     acheteur_id = db.Column(db.Integer, db.ForeignKey("acheteurs.id"), nullable=False)
     produit_id = db.Column(db.Integer, db.ForeignKey("produits.id"), nullable=False)
+    livreur_id = db.Column(db.Integer, db.ForeignKey("livreurs.id"))
+
+    panier_id = db.Column(db.String(20))  # regroupe plusieurs commandes validées en un seul panier multi-vendeurs
 
     quantite = db.Column(db.Float, nullable=False)
     prix_total = db.Column(db.Float, nullable=False)  # avant commission
@@ -231,6 +307,15 @@ class Commande(db.Model):
 
     statut = db.Column(db.String(30), default="en_attente")
     # en_attente -> confirmee_producteur -> livree -> terminee / annulee
+
+    # Position de livraison choisie par l'acheteur à la commande
+    latitude_livraison = db.Column(db.Float)
+    longitude_livraison = db.Column(db.Float)
+
+    # Suivi en direct : dernière position partagée par le livreur (ou le producteur) pour cette commande
+    latitude_livreur = db.Column(db.Float)
+    longitude_livreur = db.Column(db.Float)
+    position_livreur_maj = db.Column(db.DateTime)
 
     reference_paiement = db.Column(db.String(100))  # id transaction CinetPay/PayDunya
     date_commande = db.Column(db.DateTime, default=datetime.utcnow)
@@ -253,11 +338,19 @@ class Commande(db.Model):
             "produit_unite": self.produit.unite if self.produit else None,
             "producteur_id": self.produit.producteur_id if self.produit else None,
             "producteur_nom": self.produit.producteur.nom if self.produit and self.produit.producteur else None,
+            "livreur_id": self.livreur_id,
+            "livreur_nom": self.livreur.nom if self.livreur else None,
+            "panier_id": self.panier_id,
             "quantite": self.quantite,
             "prix_total": self.prix_total,
             "commission_montant": self.commission_montant,
             "montant_producteur": self.montant_producteur,
             "statut": self.statut,
+            "latitude_livraison": self.latitude_livraison,
+            "longitude_livraison": self.longitude_livraison,
+            "latitude_livreur": self.latitude_livreur,
+            "longitude_livreur": self.longitude_livreur,
+            "position_livreur_maj": self.position_livreur_maj.isoformat() if self.position_livreur_maj else None,
             "reference_paiement": self.reference_paiement,
             "date_commande": self.date_commande.isoformat(),
         }
