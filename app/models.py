@@ -58,13 +58,20 @@ class Produit(db.Model):
     prix_unitaire = db.Column(db.Float, nullable=False)  # en FCFA
     unite = db.Column(db.String(20), default="unité")  # kg, sac, unité, litre
     quantite_disponible = db.Column(db.Float, nullable=False, default=0)
-    photo_url = db.Column(db.String(255))
+    photo_url = db.Column(db.String(255))  # photo de couverture (première photo), pour compatibilité
+    photos_urls = db.Column(db.Text)  # liste JSON de toutes les photos (jusqu'à 4)
+    video_url = db.Column(db.String(500))  # courte vidéo (15s max)
     description = db.Column(db.Text)
 
     actif = db.Column(db.Boolean, default=True)
     date_ajout = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
+        import json
+        try:
+            photos = json.loads(self.photos_urls) if self.photos_urls else []
+        except (ValueError, TypeError):
+            photos = []
         return {
             "id": self.id,
             "producteur_id": self.producteur_id,
@@ -79,6 +86,8 @@ class Produit(db.Model):
             "unite": self.unite,
             "quantite_disponible": self.quantite_disponible,
             "photo_url": self.photo_url,
+            "photos_urls": photos,
+            "video_url": self.video_url,
             "description": self.description,
             "actif": self.actif,
         }
