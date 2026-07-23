@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
-from models import db, Producteur, Produit, Acheteur, Commande, Message
+from models import db, Producteur, Produit, Acheteur, Commande, Message, Avis
 import os
 import re
 import json
@@ -20,6 +20,17 @@ with app.app_context():
 
 PAYS_AUTORISES = ["Côte d'Ivoire", "Mali", "Burkina Faso", "Sénégal"]
 CATEGORIES = ["cereales", "elevage", "maraichage", "transforme"]
+STATUTS_COMMANDE = ["en_attente", "confirmee_producteur", "livree", "terminee", "annulee"]
+
+# Clé secrète d'accès au dashboard admin.
+# IMPORTANT : change cette valeur par défaut via une variable d'environnement
+# ADMIN_KEY sur Render (Settings > Environment), pour ne pas garder la valeur devinable.
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "agromarket_admin_2026")
+
+
+def cle_admin_valide(req):
+    return req.headers.get("X-Admin-Key") == ADMIN_KEY
+
 
 # ---------- FILTRE ANTI-CONTOURNEMENT ----------
 
@@ -124,6 +135,43 @@ def lister_producteurs():
         query = query.filter_by(pays=pays)
     producteurs = query.all()
     return jsonify([p.to_dict() for p in producteurs])
+
+
+# ---------- AVIS ET NOTES VENDEURS ----------
+
+@app.route("/api/producteurs/<int:producteur_id>/avis", methods=["POST"])
+def ajouter_avis(producteur_id):
+    Producteur.query.get_or_404(producteur_id)
+    data = request.get_json()
+
+    champs_requis = ["acheteur_id", "note"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    note = data["note"]
+    if not isinstance(note, int) or note < 1 or note > 5:
+        return jsonify({"erreur": "La note doit être un entier entre 1 et 5"}), 400
+
+    Acheteur.query.get_or_404(data["acheteur_id"])
+
+    avis = Avis(
+        producteur_id=producteur_id,
+        acheteur_id=data["acheteur_id"],
+        note=note,
+        commentaire=data.get("commentaire", ""),
+    )
+    db.session.add(avis)
+    db.session.commit()
+
+    return jsonify({"message": "Avis publié", "avis": avis.to_dict()}), 201
+
+
+@app.route("/api/producteurs/<int:producteur_id>/avis", methods=["GET"])
+def lister_avis(producteur_id):
+    Producteur.query.get_or_404(producteur_id)
+    avis = Avis.query.filter_by(producteur_id=producteur_id).order_by(Avis.date_avis.desc()).all()
+    return jsonify([a.to_dict() for a in avis])
 
 
 # ---------- PRODUITS ----------
@@ -260,6 +308,79 @@ def health():
     return jsonify({"status": "ok"})
 
 
+# ---------- COMMANDES ET SUIVI ----------
+
+@app.route("/api/commandes", methods=["POST"])
+def creer_commande():
+    data = request.get_json()
+
+    champs_requis = ["acheteur_id", "produit_id", "quantite"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    Acheteur.query.get_or_404(data["acheteur_id"])
+    produit = Produit.query.get_or_404(data["produit_id"])
+
+    quantite = data["quantite"]
+    if not isinstance(quantite, (int, float)) or quantite <= 0:
+        return jsonify({"erreur": "Quantité invalide"}), 400
+    if quantite > produit.quantite_disponible:
+        return jsonify({"erreur": "Quantité demandée supérieure au stock disponible"}), 400
+
+    prix_total = round(quantite * produit.prix_unitaire, 2)
+
+    commande = Commande(
+        acheteur_id=data["acheteur_id"],
+        produit_id=data["produit_id"],
+        quantite=quantite,
+        prix_total=prix_total,
+        statut="en_attente",
+    )
+    commande.calculer_montants()
+    db.session.add(commande)
+    db.session.commit()
+
+    return jsonify({"message": "Commande créée", "commande": commande.to_dict()}), 201
+
+
+@app.route("/api/acheteurs/<int:acheteur_id>/commandes", methods=["GET"])
+def commandes_de_lacheteur(acheteur_id):
+    Acheteur.query.get_or_404(acheteur_id)
+    commandes = (
+        Commande.query.filter_by(acheteur_id=acheteur_id)
+        .order_by(Commande.date_commande.desc())
+        .all()
+    )
+    return jsonify([c.to_dict() for c in commandes])
+
+
+@app.route("/api/producteurs/<int:producteur_id>/commandes", methods=["GET"])
+def commandes_du_producteur(producteur_id):
+    Producteur.query.get_or_404(producteur_id)
+    commandes = (
+        Commande.query.join(Produit)
+        .filter(Produit.producteur_id == producteur_id)
+        .order_by(Commande.date_commande.desc())
+        .all()
+    )
+    return jsonify([c.to_dict() for c in commandes])
+
+
+@app.route("/api/commandes/<int:commande_id>/statut", methods=["PUT"])
+def modifier_statut_commande(commande_id):
+    commande = Commande.query.get_or_404(commande_id)
+    data = request.get_json()
+
+    nouveau_statut = data.get("statut")
+    if nouveau_statut not in STATUTS_COMMANDE:
+        return jsonify({"erreur": f"Statut invalide. Options: {', '.join(STATUTS_COMMANDE)}"}), 400
+
+    commande.statut = nouveau_statut
+    db.session.commit()
+    return jsonify({"message": "Statut mis à jour", "commande": commande.to_dict()})
+
+
 # ---------- MESSAGERIE (avec filtre anti-contournement) ----------
 
 @app.route("/api/messages", methods=["POST"])
@@ -316,6 +437,46 @@ def obtenir_conversation():
         .all()
     )
     return jsonify([m.to_dict() for m in messages])
+
+
+# ---------- ADMINISTRATION ----------
+
+@app.route("/api/admin/producteurs", methods=["GET"])
+def admin_lister_producteurs():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    producteurs = Producteur.query.order_by(Producteur.date_inscription.desc()).all()
+    return jsonify([p.to_dict() for p in producteurs])
+
+
+@app.route("/api/admin/producteurs/<int:producteur_id>/verifier", methods=["PUT"])
+def admin_verifier_producteur(producteur_id):
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    producteur = Producteur.query.get_or_404(producteur_id)
+    data = request.get_json()
+    producteur.verifie = bool(data.get("verifie", True))
+    db.session.commit()
+    return jsonify({"message": "Statut de vérification mis à jour", "producteur": producteur.to_dict()})
+
+
+@app.route("/api/admin/producteurs/<int:producteur_id>/actif", methods=["PUT"])
+def admin_toggle_actif_producteur(producteur_id):
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    producteur = Producteur.query.get_or_404(producteur_id)
+    data = request.get_json()
+    producteur.actif = bool(data.get("actif", True))
+    db.session.commit()
+    return jsonify({"message": "Statut mis à jour", "producteur": producteur.to_dict()})
+
+
+@app.route("/api/admin/commandes", methods=["GET"])
+def admin_lister_commandes():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    commandes = Commande.query.order_by(Commande.date_commande.desc()).all()
+    return jsonify([c.to_dict() for c in commandes])
 
 
 if __name__ == "__main__":
