@@ -1,12 +1,13 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
-from models import db, Producteur, Produit, Acheteur, Commande, Message, Avis, Favori
+from models import db, Producteur, Produit, Acheteur, Commande, Message, Avis, Favori, TicketSupport, Livreur
 import os
 import re
 import json
 import secrets
 import urllib.request
+from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
@@ -21,7 +22,7 @@ with app.app_context():
     db.create_all()
 
 PAYS_AUTORISES = ["Côte d'Ivoire", "Mali", "Burkina Faso", "Sénégal"]
-CATEGORIES = ["cereales", "elevage", "maraichage", "transforme"]
+CATEGORIES = ["cereales", "elevage", "maraichage", "transforme", "restaurant", "autre"]
 STATUTS_COMMANDE = ["en_attente", "confirmee_producteur", "livree", "terminee", "annulee"]
 
 LABELS_STATUT_COMMANDE = {
@@ -130,6 +131,8 @@ def inscription_producteur():
         pays=data["pays"],
         ville=data["ville"],
         zone_livraison=data.get("zone_livraison", ""),
+        latitude=data.get("latitude"),
+        longitude=data.get("longitude"),
         type_production=data.get("type_production", ""),
         description=data.get("description", ""),
         photo_url=data.get("photo_url", ""),
@@ -169,7 +172,8 @@ def modifier_producteur(producteur_id):
     producteur = Producteur.query.get_or_404(producteur_id)
     data = request.get_json()
 
-    for champ in ["nom", "pays", "ville", "zone_livraison", "type_production", "description", "photo_url", "histoire"]:
+    for champ in ["nom", "pays", "ville", "zone_livraison", "type_production", "description",
+                  "photo_url", "histoire", "latitude", "longitude"]:
         if champ in data:
             setattr(producteur, champ, data[champ])
 
@@ -194,6 +198,106 @@ def enregistrer_push_token_producteur(producteur_id):
     producteur.push_token = data.get("push_token", "")
     db.session.commit()
     return jsonify({"message": "Jeton enregistré"})
+
+
+# ---------- LIVREURS / TRANSPORTEURS ----------
+
+@app.route("/api/livreurs/inscription", methods=["POST"])
+def inscription_livreur():
+    data = request.get_json()
+
+    champs_requis = ["nom", "telephone", "mot_de_passe", "pays", "ville"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    if Livreur.query.filter_by(telephone=data["telephone"]).first():
+        return jsonify({"erreur": "Ce numéro de téléphone est déjà enregistré"}), 409
+
+    livreur = Livreur(
+        nom=data["nom"],
+        telephone=data["telephone"],
+        mot_de_passe_hash=generate_password_hash(data["mot_de_passe"]),
+        pays=data["pays"],
+        ville=data["ville"],
+        vehicule=data.get("vehicule", ""),
+    )
+    db.session.add(livreur)
+    db.session.commit()
+
+    return jsonify({"message": "Compte livreur créé", "livreur": livreur.to_dict()}), 201
+
+
+@app.route("/api/livreurs/connexion", methods=["POST"])
+def connexion_livreur():
+    data = request.get_json()
+    livreur = Livreur.query.filter_by(telephone=data.get("telephone")).first()
+
+    if not livreur or not check_password_hash(livreur.mot_de_passe_hash, data.get("mot_de_passe", "")):
+        return jsonify({"erreur": "Téléphone ou mot de passe incorrect"}), 401
+
+    return jsonify({"message": "Connexion réussie", "livreur": livreur.to_dict()}), 200
+
+
+@app.route("/api/livreurs/<int:livreur_id>", methods=["GET"])
+def obtenir_livreur(livreur_id):
+    livreur = Livreur.query.get_or_404(livreur_id)
+    return jsonify(livreur.to_dict())
+
+
+@app.route("/api/livreurs/<int:livreur_id>/push-token", methods=["PUT"])
+def enregistrer_push_token_livreur(livreur_id):
+    livreur = Livreur.query.get_or_404(livreur_id)
+    data = request.get_json()
+    livreur.push_token = data.get("push_token", "")
+    db.session.commit()
+    return jsonify({"message": "Jeton enregistré"})
+
+
+@app.route("/api/livraisons-disponibles", methods=["GET"])
+def livraisons_disponibles():
+    """Commandes confirmées par le vendeur, pas encore prises en charge par un livreur."""
+    commandes = (
+        Commande.query.filter_by(statut="confirmee_producteur", livreur_id=None)
+        .order_by(Commande.date_commande.asc())
+        .all()
+    )
+    return jsonify([c.to_dict() for c in commandes])
+
+
+@app.route("/api/livreurs/<int:livreur_id>/livraisons", methods=["GET"])
+def livraisons_du_livreur(livreur_id):
+    Livreur.query.get_or_404(livreur_id)
+    commandes = (
+        Commande.query.filter_by(livreur_id=livreur_id)
+        .order_by(Commande.date_commande.desc())
+        .all()
+    )
+    return jsonify([c.to_dict() for c in commandes])
+
+
+@app.route("/api/commandes/<int:commande_id>/accepter-livraison", methods=["PUT"])
+def accepter_livraison(commande_id):
+    commande = Commande.query.get_or_404(commande_id)
+    data = request.get_json()
+    livreur_id = data.get("livreur_id")
+    if not livreur_id:
+        return jsonify({"erreur": "livreur_id requis"}), 400
+    if commande.livreur_id:
+        return jsonify({"erreur": "Cette livraison a déjà été prise en charge"}), 409
+
+    Livreur.query.get_or_404(livreur_id)
+    commande.livreur_id = livreur_id
+    db.session.commit()
+
+    if commande.acheteur:
+        envoyer_notification_push(
+            commande.acheteur.push_token,
+            "Livreur en route",
+            f"Un livreur a pris en charge ta commande « {commande.produit.nom if commande.produit else ''} ».",
+        )
+
+    return jsonify({"message": "Livraison acceptée", "commande": commande.to_dict()})
 
 
 # ---------- AVIS ET NOTES VENDEURS ----------
@@ -268,6 +372,49 @@ def retirer_favori(acheteur_id, produit_id):
         db.session.delete(favori)
         db.session.commit()
     return jsonify({"message": "Retiré des favoris"})
+
+
+# ---------- SUPPORT CLIENT ----------
+
+@app.route("/api/support", methods=["POST"])
+def creer_ticket_support():
+    data = request.get_json()
+
+    champs_requis = ["nom", "telephone", "message"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    ticket = TicketSupport(
+        nom=data["nom"],
+        telephone=data["telephone"],
+        sujet=data.get("sujet", ""),
+        message=data["message"],
+        type_compte=data.get("type_compte", "visiteur"),
+    )
+    db.session.add(ticket)
+    db.session.commit()
+
+    return jsonify({"message": "Ticket envoyé", "ticket": ticket.to_dict()}), 201
+
+
+@app.route("/api/admin/support", methods=["GET"])
+def admin_lister_support():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    tickets = TicketSupport.query.order_by(TicketSupport.date_creation.desc()).all()
+    return jsonify([t.to_dict() for t in tickets])
+
+
+@app.route("/api/admin/support/<int:ticket_id>/statut", methods=["PUT"])
+def admin_modifier_statut_support(ticket_id):
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    ticket = TicketSupport.query.get_or_404(ticket_id)
+    data = request.get_json()
+    ticket.statut = data.get("statut", "traite")
+    db.session.commit()
+    return jsonify({"message": "Statut mis à jour", "ticket": ticket.to_dict()})
 
 
 # ---------- PRODUITS ----------
@@ -381,6 +528,8 @@ def inscription_acheteur():
         pays=data["pays"],
         ville=data["ville"],
         adresse_livraison=data.get("adresse_livraison", ""),
+        latitude=data.get("latitude"),
+        longitude=data.get("longitude"),
     )
     db.session.add(acheteur)
     db.session.commit()
@@ -441,6 +590,8 @@ def creer_commande():
         quantite=quantite,
         prix_total=prix_total,
         statut="en_attente",
+        latitude_livraison=data.get("latitude_livraison"),
+        longitude_livraison=data.get("longitude_livraison"),
     )
     commande.calculer_montants()
     db.session.add(commande)
@@ -454,6 +605,99 @@ def creer_commande():
         )
 
     return jsonify({"message": "Commande créée", "commande": commande.to_dict()}), 201
+
+
+@app.route("/api/paniers/commander", methods=["POST"])
+def commander_panier():
+    """Valide un panier multi-vendeurs : crée une commande par produit,
+    toutes rattachées au même panier_id."""
+    data = request.get_json()
+
+    champs_requis = ["acheteur_id", "articles"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    articles = data["articles"]
+    if not isinstance(articles, list) or not articles:
+        return jsonify({"erreur": "Le panier est vide"}), 400
+
+    acheteur = Acheteur.query.get_or_404(data["acheteur_id"])
+    latitude_livraison = data.get("latitude_livraison")
+    longitude_livraison = data.get("longitude_livraison")
+
+    panier_id = secrets.token_hex(4)
+    commandes_creees = []
+
+    for article in articles:
+        produit_id = article.get("produit_id")
+        quantite = article.get("quantite")
+        if not produit_id or not quantite:
+            continue
+        produit = Produit.query.get(produit_id)
+        if not produit:
+            continue
+        if quantite > produit.quantite_disponible:
+            return jsonify({"erreur": f"Quantité indisponible pour {produit.nom}"}), 400
+
+        prix_total = round(quantite * produit.prix_unitaire, 2)
+        commande = Commande(
+            acheteur_id=data["acheteur_id"],
+            produit_id=produit_id,
+            quantite=quantite,
+            prix_total=prix_total,
+            statut="en_attente",
+            panier_id=panier_id,
+            latitude_livraison=latitude_livraison,
+            longitude_livraison=longitude_livraison,
+        )
+        commande.calculer_montants()
+        db.session.add(commande)
+        commandes_creees.append(commande)
+
+    if not commandes_creees:
+        return jsonify({"erreur": "Aucun article valide dans le panier"}), 400
+
+    db.session.commit()
+
+    for commande in commandes_creees:
+        if commande.produit and commande.produit.producteur:
+            envoyer_notification_push(
+                commande.produit.producteur.push_token,
+                "Nouvelle commande reçue",
+                f"{acheteur.nom} a commandé {commande.produit.nom}",
+            )
+
+    return jsonify({
+        "message": "Panier validé",
+        "panier_id": panier_id,
+        "commandes": [c.to_dict() for c in commandes_creees],
+    }), 201
+
+
+@app.route("/api/commandes/<int:commande_id>", methods=["GET"])
+def obtenir_commande(commande_id):
+    commande = Commande.query.get_or_404(commande_id)
+    return jsonify(commande.to_dict())
+
+
+@app.route("/api/commandes/<int:commande_id>/position", methods=["PUT"])
+def mettre_a_jour_position_livreur(commande_id):
+    """Le producteur ou le livreur partage sa position en direct pendant la livraison."""
+    commande = Commande.query.get_or_404(commande_id)
+    data = request.get_json()
+
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    if latitude is None or longitude is None:
+        return jsonify({"erreur": "latitude et longitude requis"}), 400
+
+    commande.latitude_livreur = latitude
+    commande.longitude_livreur = longitude
+    commande.position_livreur_maj = datetime.utcnow()
+    db.session.commit()
+
+    return jsonify({"message": "Position mise à jour", "commande": commande.to_dict()})
 
 
 @app.route("/api/acheteurs/<int:acheteur_id>/commandes", methods=["GET"])
