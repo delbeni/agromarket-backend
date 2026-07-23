@@ -23,12 +23,17 @@ class Producteur(db.Model):
     photo_url = db.Column(db.String(255))
     histoire = db.Column(db.Text)
 
+    verifie = db.Column(db.Boolean, default=False)  # badge "vendeur vérifié", accordé par l'admin
+
     actif = db.Column(db.Boolean, default=True)
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
 
     produits = db.relationship("Produit", backref="producteur", lazy=True)
+    avis = db.relationship("Avis", backref="producteur", lazy=True)
 
     def to_dict(self):
+        notes = [a.note for a in self.avis]
+        note_moyenne = round(sum(notes) / len(notes), 1) if notes else None
         return {
             "id": self.id,
             "nom": self.nom,
@@ -40,9 +45,12 @@ class Producteur(db.Model):
             "description": self.description,
             "photo_url": self.photo_url,
             "histoire": self.histoire,
+            "verifie": self.verifie,
             "actif": self.actif,
             "date_inscription": self.date_inscription.isoformat(),
             "nombre_produits": len(self.produits),
+            "note_moyenne": note_moyenne,
+            "nombre_avis": len(notes),
         }
 
 
@@ -72,6 +80,8 @@ class Produit(db.Model):
             photos = json.loads(self.photos_urls) if self.photos_urls else []
         except (ValueError, TypeError):
             photos = []
+        notes = [a.note for a in self.producteur.avis] if self.producteur else []
+        note_moyenne = round(sum(notes) / len(notes), 1) if notes else None
         return {
             "id": self.id,
             "producteur_id": self.producteur_id,
@@ -80,6 +90,9 @@ class Produit(db.Model):
             "producteur_pays": self.producteur.pays if self.producteur else None,
             "producteur_photo_url": self.producteur.photo_url if self.producteur else None,
             "producteur_histoire": self.producteur.histoire if self.producteur else None,
+            "producteur_verifie": self.producteur.verifie if self.producteur else False,
+            "producteur_note_moyenne": note_moyenne,
+            "producteur_nombre_avis": len(notes),
             "nom": self.nom,
             "categorie": self.categorie,
             "prix_unitaire": self.prix_unitaire,
@@ -146,6 +159,35 @@ class Message(db.Model):
             "contient_infraction": self.contient_infraction,
             "date_envoi": self.date_envoi.isoformat(),
         }
+
+
+class Avis(db.Model):
+    """Avis et note laissés par un acheteur sur un producteur."""
+    __tablename__ = "avis"
+
+    id = db.Column(db.Integer, primary_key=True)
+    producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+    acheteur_id = db.Column(db.Integer, db.ForeignKey("acheteurs.id"), nullable=False)
+
+    note = db.Column(db.Integer, nullable=False)  # de 1 à 5
+    commentaire = db.Column(db.Text)
+
+    date_avis = db.Column(db.DateTime, default=datetime.utcnow)
+
+    acheteur = db.relationship("Acheteur", backref="avis_donnes")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "producteur_id": self.producteur_id,
+            "acheteur_id": self.acheteur_id,
+            "acheteur_nom": self.acheteur.nom if self.acheteur else "Anonyme",
+            "note": self.note,
+            "commentaire": self.commentaire,
+            "date_avis": self.date_avis.isoformat(),
+        }
+
+
 class Commande(db.Model):
     """Commande passée par un acheteur pour un produit."""
     __tablename__ = "commandes"
@@ -161,7 +203,7 @@ class Commande(db.Model):
     montant_producteur = db.Column(db.Float)  # ce que le producteur reçoit
 
     statut = db.Column(db.String(30), default="en_attente")
-    # en_attente -> payee -> confirmee_producteur -> livree -> terminee / annulee
+    # en_attente -> confirmee_producteur -> livree -> terminee / annulee
 
     reference_paiement = db.Column(db.String(100))  # id transaction CinetPay/PayDunya
     date_commande = db.Column(db.DateTime, default=datetime.utcnow)
@@ -176,8 +218,14 @@ class Commande(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
+            "acheteur_id": self.acheteur_id,
             "acheteur": self.acheteur.nom if self.acheteur else None,
+            "produit_id": self.produit_id,
             "produit": self.produit.nom if self.produit else None,
+            "produit_photo_url": self.produit.photo_url if self.produit else None,
+            "produit_unite": self.produit.unite if self.produit else None,
+            "producteur_id": self.produit.producteur_id if self.produit else None,
+            "producteur_nom": self.produit.producteur.nom if self.produit and self.produit.producteur else None,
             "quantite": self.quantite,
             "prix_total": self.prix_total,
             "commission_montant": self.commission_montant,
