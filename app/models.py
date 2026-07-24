@@ -502,7 +502,8 @@ class Commande(db.Model):
     produit = db.relationship("Produit", backref="commandes")
 
     def calculer_montants(self):
-        self.commission_montant = round(self.prix_total * self.commission_taux, 2)
+        taux = self.commission_taux if self.commission_taux is not None else 0.08
+        self.commission_montant = round(self.prix_total * taux, 2)
         self.montant_producteur = round(self.prix_total - self.commission_montant, 2)
 
     def to_dict(self):
