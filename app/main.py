@@ -11,6 +11,7 @@ import re
 import json
 import secrets
 import urllib.request
+import urllib.parse
 from datetime import datetime
 
 app = Flask(__name__)
@@ -38,6 +39,57 @@ LABELS_STATUT_COMMANDE = {
 }
 
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "agromarket_admin_2026")
+
+# Africa's Talking (SMS pour les producteurs sans smartphone).
+# IMPORTANT : déplace AT_API_KEY vers une variable d'environnement sur Render
+# dès que possible, pour ne pas garder la clé en clair dans le code.
+AT_USERNAME = os.environ.get("AT_USERNAME", "sandbox")
+AT_API_KEY = os.environ.get("AT_API_KEY", "atsk_42cb47be1ad9ad1f1965f0fc6c9805ebc978840594879d9c0a36e98dd1b0440d66a93950")
+
+INDICATIFS_PAYS = {
+    "Côte d'Ivoire": "225",
+    "Mali": "223",
+    "Burkina Faso": "226",
+    "Sénégal": "221",
+}
+
+
+def formater_numero_international(telephone, pays):
+    chiffres = re.sub(r"\D", "", telephone or "")
+    chiffres = chiffres.lstrip("0")
+    indicatif = INDICATIFS_PAYS.get(pays, "225")
+    return f"+{indicatif}{chiffres}"
+
+
+def envoyer_sms(telephone, pays, message):
+    """Envoie un SMS via Africa's Talking. Échoue silencieusement pour ne
+    jamais bloquer la requête principale si le SMS ne part pas."""
+    if not telephone:
+        return
+    try:
+        numero = formater_numero_international(telephone, pays)
+        base_url = (
+            "https://api.sandbox.africastalking.com/version1/messaging"
+            if AT_USERNAME == "sandbox"
+            else "https://api.africastalking.com/version1/messaging"
+        )
+        data = urllib.parse.urlencode({
+            "username": AT_USERNAME,
+            "to": numero,
+            "message": message,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            base_url, data=data,
+            headers={
+                "apiKey": AT_API_KEY,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
 
 
 def cle_admin_valide(req):
@@ -124,6 +176,11 @@ def inscription_producteur():
     if parrain:
         parrain.nombre_filleuls = (parrain.nombre_filleuls or 0) + 1
         db.session.commit()
+
+    envoyer_sms(
+        producteur.telephone, producteur.pays,
+        f"Bienvenue sur AgroMarket, {producteur.nom} ! Ton compte producteur est créé. Ajoute tes produits pour commencer à vendre.",
+    )
 
     return jsonify({"message": "Compte producteur créé", "producteur": producteur.to_dict()}), 201
 
@@ -542,6 +599,10 @@ def participer_achat_groupe(achat_groupe_id):
                 campagne.produit.producteur.push_token, "Achat groupé atteint !",
                 f"L'achat groupé pour {campagne.produit.nom} a atteint son objectif.",
             )
+            envoyer_sms(
+                campagne.produit.producteur.telephone, campagne.produit.producteur.pays,
+                f"AgroMarket : ton achat groupé pour {campagne.produit.nom} a atteint son objectif ! Les commandes sont créées.",
+            )
 
     return jsonify({"message": "Participation enregistrée", "achat_groupe": campagne.to_dict()}), 201
 
@@ -604,6 +665,10 @@ def promettre_financement(besoin_id):
         envoyer_notification_push(
             besoin.producteur.push_token, "Nouveau soutien reçu",
             f"Quelqu'un s'est engagé à te soutenir pour « {besoin.titre} ».",
+        )
+        envoyer_sms(
+            besoin.producteur.telephone, besoin.producteur.pays,
+            f"AgroMarket : quelqu'un s'est engagé à te soutenir pour « {besoin.titre} ». Ouvre l'app pour voir le détail.",
         )
 
     return jsonify({"message": "Promesse enregistrée", "financement": besoin.to_dict()}), 201
@@ -740,6 +805,8 @@ def creer_commande():
     if produit.producteur:
         envoyer_notification_push(produit.producteur.push_token, "Nouvelle commande reçue",
                                    f"{acheteur.nom} a commandé {produit.nom}")
+        envoyer_sms(produit.producteur.telephone, produit.producteur.pays,
+                    f"AgroMarket : nouvelle commande de {acheteur.nom} pour {produit.nom}. Ouvre l'app pour confirmer.")
     return jsonify({"message": "Commande créée", "commande": commande.to_dict()}), 201
 
 
@@ -789,6 +856,8 @@ def commander_panier():
         if commande.produit and commande.produit.producteur:
             envoyer_notification_push(commande.produit.producteur.push_token, "Nouvelle commande reçue",
                                        f"{acheteur.nom} a commandé {commande.produit.nom}")
+            envoyer_sms(commande.produit.producteur.telephone, commande.produit.producteur.pays,
+                        f"AgroMarket : nouvelle commande de {acheteur.nom} pour {commande.produit.nom}. Ouvre l'app pour confirmer.")
 
     return jsonify({
         "message": "Panier validé", "panier_id": panier_id,
