@@ -4,7 +4,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from models import (
     db, Producteur, Produit, Acheteur, Commande, Message, Avis, Favori, TicketSupport,
     Livreur, HistoriquePrix, AchatGroupe, ParticipationGroupe, BesoinFinancement,
-    PromesseFinancement, Terrain,
+    PromesseFinancement, Terrain, CodePremium,
 )
 import os
 import re
@@ -169,6 +169,44 @@ def enregistrer_push_token_producteur(producteur_id):
     producteur.push_token = request.get_json().get("push_token", "")
     db.session.commit()
     return jsonify({"message": "Jeton enregistré"})
+
+
+@app.route("/api/producteurs/<int:producteur_id>/consommer-credit", methods=["POST"])
+def consommer_credit(producteur_id):
+    """Vérifie et consomme un crédit d'utilisation des outils (calculateur, générateur d'annonce)."""
+    producteur = Producteur.query.get_or_404(producteur_id)
+    if producteur.premium:
+        return jsonify({"autorise": True, "credits_restants": None, "premium": True})
+    if (producteur.credits_outils or 0) > 0:
+        producteur.credits_outils -= 1
+        db.session.commit()
+        return jsonify({"autorise": True, "credits_restants": producteur.credits_outils, "premium": False})
+    return jsonify({
+        "autorise": False,
+        "erreur": "Tu as utilisé tous tes crédits gratuits ce mois-ci. Contacte le support pour la version premium.",
+    }), 403
+
+
+@app.route("/api/producteurs/<int:producteur_id>/utiliser-code-premium", methods=["POST"])
+def utiliser_code_premium(producteur_id):
+    producteur = Producteur.query.get_or_404(producteur_id)
+    code_saisi = (request.get_json().get("code") or "").strip().upper()
+    if not code_saisi:
+        return jsonify({"erreur": "Code requis"}), 400
+
+    code = CodePremium.query.filter_by(code=code_saisi).first()
+    if not code:
+        return jsonify({"erreur": "Code invalide"}), 404
+    if code.utilise:
+        return jsonify({"erreur": "Ce code a déjà été utilisé"}), 409
+
+    code.utilise = True
+    code.producteur_id = producteur_id
+    code.date_utilisation = datetime.utcnow()
+    producteur.premium = True
+    db.session.commit()
+
+    return jsonify({"message": "Premium débloqué !", "producteur": producteur.to_dict()})
 
 
 # ---------- LIVREURS / TRANSPORTEURS ----------
@@ -880,6 +918,62 @@ def admin_toggle_actif_producteur(producteur_id):
     producteur.actif = bool(request.get_json().get("actif", True))
     db.session.commit()
     return jsonify({"message": "Statut mis à jour", "producteur": producteur.to_dict()})
+
+
+@app.route("/api/admin/producteurs/<int:producteur_id>/premium", methods=["PUT"])
+def admin_toggle_premium_producteur(producteur_id):
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    producteur = Producteur.query.get_or_404(producteur_id)
+    producteur.premium = bool(request.get_json().get("premium", True))
+    db.session.commit()
+    return jsonify({"message": "Statut premium mis à jour", "producteur": producteur.to_dict()})
+
+
+@app.route("/api/admin/producteurs/<int:producteur_id>/credits", methods=["PUT"])
+def admin_reinitialiser_credits(producteur_id):
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    producteur = Producteur.query.get_or_404(producteur_id)
+    producteur.credits_outils = int(request.get_json().get("credits", 10))
+    db.session.commit()
+    return jsonify({"message": "Crédits mis à jour", "producteur": producteur.to_dict()})
+
+
+@app.route("/api/admin/codes-premium", methods=["POST"])
+def admin_generer_code_premium():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    while True:
+        code_genere = secrets.token_hex(4).upper()
+        if not CodePremium.query.filter_by(code=code_genere).first():
+            break
+    code = CodePremium(code=code_genere)
+    db.session.add(code)
+    db.session.commit()
+    return jsonify({"message": "Code généré", "code_premium": code.to_dict()}), 201
+
+
+@app.route("/api/admin/codes-premium", methods=["GET"])
+def admin_lister_codes_premium():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    codes = CodePremium.query.order_by(CodePremium.date_creation.desc()).all()
+    return jsonify([c.to_dict() for c in codes])
+
+
+@app.route("/api/admin/statistiques", methods=["GET"])
+def admin_statistiques():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    return jsonify({
+        "nombre_producteurs": Producteur.query.count(),
+        "nombre_acheteurs": Acheteur.query.count(),
+        "nombre_livreurs": Livreur.query.count(),
+        "nombre_produits": Produit.query.count(),
+        "commandes_totales": Commande.query.count(),
+        "livraisons_reussies": Commande.query.filter(Commande.statut.in_(["livree", "terminee"])).count(),
+    })
 
 
 @app.route("/api/admin/commandes", methods=["GET"])
