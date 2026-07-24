@@ -15,24 +15,24 @@ class Producteur(db.Model):
 
     pays = db.Column(db.String(50), nullable=False, default="Côte d'Ivoire")
     ville = db.Column(db.String(100), nullable=False)
-    zone_livraison = db.Column(db.String(255))  # ex: "Abidjan - Cocody, Yopougon"
+    zone_livraison = db.Column(db.String(255))
 
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
 
-    type_production = db.Column(db.String(50))  # cereales, elevage, maraichage, transforme
+    type_production = db.Column(db.String(50))
     description = db.Column(db.Text)
 
     photo_url = db.Column(db.String(255))
     histoire = db.Column(db.Text)
 
-    verifie = db.Column(db.Boolean, default=False)  # badge "vendeur vérifié", accordé par l'admin
+    verifie = db.Column(db.Boolean, default=False)
 
-    code_parrainage = db.Column(db.String(10), unique=True)  # code à partager
-    code_parrain_utilise = db.Column(db.String(10))  # code d'un autre producteur, saisi à l'inscription
+    code_parrainage = db.Column(db.String(10), unique=True)
+    code_parrain_utilise = db.Column(db.String(10))
     nombre_filleuls = db.Column(db.Integer, default=0)
 
-    push_token = db.Column(db.String(255))  # jeton Expo pour notifications push
+    push_token = db.Column(db.String(255))
 
     actif = db.Column(db.Boolean, default=True)
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
@@ -75,17 +75,19 @@ class Produit(db.Model):
     producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
 
     nom = db.Column(db.String(150), nullable=False)
-    categorie = db.Column(db.String(50), nullable=False)  # cereales, elevage, maraichage, transforme, restaurant, autre
-    prix_unitaire = db.Column(db.Float, nullable=False)  # en FCFA
-    unite = db.Column(db.String(20), default="unité")  # kg, sac, unité, litre
+    categorie = db.Column(db.String(50), nullable=False)
+    prix_unitaire = db.Column(db.Float, nullable=False)
+    unite = db.Column(db.String(20), default="unité")
     quantite_disponible = db.Column(db.Float, nullable=False, default=0)
-    photo_url = db.Column(db.String(255))  # photo de couverture (première photo), pour compatibilité
-    photos_urls = db.Column(db.Text)  # liste JSON de toutes les photos (jusqu'à 4)
-    video_url = db.Column(db.String(500))  # courte vidéo (15s max)
+    photo_url = db.Column(db.String(255))
+    photos_urls = db.Column(db.Text)
+    video_url = db.Column(db.String(500))
     description = db.Column(db.Text)
 
     actif = db.Column(db.Boolean, default=True)
     date_ajout = db.Column(db.DateTime, default=datetime.utcnow)
+
+    historique_prix = db.relationship("HistoriquePrix", backref="produit", lazy=True)
 
     def to_dict(self):
         import json
@@ -121,6 +123,185 @@ class Produit(db.Model):
         }
 
 
+class HistoriquePrix(db.Model):
+    """Trace l'évolution du prix d'un produit dans le temps."""
+    __tablename__ = "historique_prix"
+
+    id = db.Column(db.Integer, primary_key=True)
+    produit_id = db.Column(db.Integer, db.ForeignKey("produits.id"), nullable=False)
+    prix = db.Column(db.Float, nullable=False)
+    date = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {"prix": self.prix, "date": self.date.isoformat()}
+
+
+class AchatGroupe(db.Model):
+    """Campagne d'achat groupé : prix réduit débloqué une fois la quantité cible atteinte."""
+    __tablename__ = "achats_groupes"
+
+    id = db.Column(db.Integer, primary_key=True)
+    produit_id = db.Column(db.Integer, db.ForeignKey("produits.id"), nullable=False)
+
+    prix_unitaire_groupe = db.Column(db.Float, nullable=False)
+    quantite_cible = db.Column(db.Float, nullable=False)
+    quantite_actuelle = db.Column(db.Float, default=0)
+
+    statut = db.Column(db.String(20), default="ouvert")
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    produit = db.relationship("Produit")
+    participations = db.relationship("ParticipationGroupe", backref="achat_groupe", lazy=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "produit_id": self.produit_id,
+            "produit_nom": self.produit.nom if self.produit else None,
+            "producteur_nom": self.produit.producteur.nom if self.produit and self.produit.producteur else None,
+            "prix_unitaire_normal": self.produit.prix_unitaire if self.produit else None,
+            "prix_unitaire_groupe": self.prix_unitaire_groupe,
+            "quantite_cible": self.quantite_cible,
+            "quantite_actuelle": self.quantite_actuelle,
+            "nombre_participants": len(self.participations),
+            "statut": self.statut,
+            "date_creation": self.date_creation.isoformat(),
+        }
+
+
+class ParticipationGroupe(db.Model):
+    """Engagement d'un acheteur dans un achat groupé."""
+    __tablename__ = "participations_groupe"
+
+    id = db.Column(db.Integer, primary_key=True)
+    achat_groupe_id = db.Column(db.Integer, db.ForeignKey("achats_groupes.id"), nullable=False)
+    acheteur_id = db.Column(db.Integer, db.ForeignKey("acheteurs.id"), nullable=False)
+    quantite = db.Column(db.Float, nullable=False)
+    date_participation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "acheteur_id": self.acheteur_id,
+            "acheteur_nom": self.acheteur.nom if self.acheteur else None,
+            "quantite": self.quantite,
+            "date_participation": self.date_participation.isoformat(),
+        }
+
+
+class BesoinFinancement(db.Model):
+    """Besoin de financement publié par un producteur (pré-financement diaspora)."""
+    __tablename__ = "besoins_financement"
+
+    id = db.Column(db.Integer, primary_key=True)
+    producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+
+    titre = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text)
+    montant_cible = db.Column(db.Float, nullable=False)
+    montant_leve = db.Column(db.Float, default=0)
+
+    statut = db.Column(db.String(20), default="ouvert")
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    producteur = db.relationship("Producteur")
+    promesses = db.relationship("PromesseFinancement", backref="besoin", lazy=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "producteur_id": self.producteur_id,
+            "producteur_nom": self.producteur.nom if self.producteur else None,
+            "producteur_ville": self.producteur.ville if self.producteur else None,
+            "producteur_verifie": self.producteur.verifie if self.producteur else False,
+            "titre": self.titre,
+            "description": self.description,
+            "montant_cible": self.montant_cible,
+            "montant_leve": self.montant_leve,
+            "nombre_soutiens": len(self.promesses),
+            "statut": self.statut,
+            "date_creation": self.date_creation.isoformat(),
+        }
+
+
+class PromesseFinancement(db.Model):
+    """Engagement de soutien financier (promesse, pas un vrai transfert d'argent tant que le paiement réel n'est pas actif)."""
+    __tablename__ = "promesses_financement"
+
+    id = db.Column(db.Integer, primary_key=True)
+    besoin_id = db.Column(db.Integer, db.ForeignKey("besoins_financement.id"), nullable=False)
+    acheteur_id = db.Column(db.Integer, db.ForeignKey("acheteurs.id"), nullable=False)
+    montant = db.Column(db.Float, nullable=False)
+    date_promesse = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "acheteur_id": self.acheteur_id,
+            "acheteur_nom": self.acheteur.nom if self.acheteur else None,
+            "montant": self.montant,
+            "date_promesse": self.date_promesse.isoformat(),
+        }
+
+
+class Terrain(db.Model):
+    """Annonce de terrain vérifié. Mise en relation uniquement : le paiement se fait
+    obligatoirement chez un notaire partenaire vérifié, jamais dans l'application."""
+    __tablename__ = "terrains"
+
+    id = db.Column(db.Integer, primary_key=True)
+    producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+
+    titre = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text)
+    superficie = db.Column(db.Float)
+    unite_superficie = db.Column(db.String(20), default="m²")
+    prix_total = db.Column(db.Float, nullable=False)
+
+    ville = db.Column(db.String(100))
+    pays = db.Column(db.String(50))
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+
+    photos_urls = db.Column(db.Text)
+
+    notaire_nom = db.Column(db.String(150))
+    notaire_contact = db.Column(db.String(50))
+
+    verifie_admin = db.Column(db.Boolean, default=False)
+    actif = db.Column(db.Boolean, default=True)
+    date_ajout = db.Column(db.DateTime, default=datetime.utcnow)
+
+    producteur = db.relationship("Producteur")
+
+    def to_dict(self):
+        import json
+        try:
+            photos = json.loads(self.photos_urls) if self.photos_urls else []
+        except (ValueError, TypeError):
+            photos = []
+        return {
+            "id": self.id,
+            "producteur_id": self.producteur_id,
+            "producteur_nom": self.producteur.nom if self.producteur else None,
+            "titre": self.titre,
+            "description": self.description,
+            "superficie": self.superficie,
+            "unite_superficie": self.unite_superficie,
+            "prix_total": self.prix_total,
+            "ville": self.ville,
+            "pays": self.pays,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "photos_urls": photos,
+            "notaire_nom": self.notaire_nom,
+            "notaire_contact": self.notaire_contact,
+            "verifie_admin": self.verifie_admin,
+            "actif": self.actif,
+            "date_ajout": self.date_ajout.isoformat(),
+        }
+
+
 class Acheteur(db.Model):
     """Compte acheteur/client."""
     __tablename__ = "acheteurs"
@@ -137,7 +318,7 @@ class Acheteur(db.Model):
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
 
-    push_token = db.Column(db.String(255))  # jeton Expo pour notifications push
+    push_token = db.Column(db.String(255))
 
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -165,7 +346,7 @@ class Livreur(db.Model):
 
     pays = db.Column(db.String(50), nullable=False, default="Côte d'Ivoire")
     ville = db.Column(db.String(100), nullable=False)
-    vehicule = db.Column(db.String(50))  # moto, voiture, tricycle, à pied...
+    vehicule = db.Column(db.String(50))
 
     push_token = db.Column(db.String(255))
 
@@ -197,9 +378,9 @@ class Message(db.Model):
     producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
     produit_id = db.Column(db.Integer, db.ForeignKey("produits.id"))
 
-    expediteur_type = db.Column(db.String(20), nullable=False)  # "acheteur" ou "producteur"
+    expediteur_type = db.Column(db.String(20), nullable=False)
     contenu_original = db.Column(db.Text, nullable=False)
-    contenu_filtre = db.Column(db.Text, nullable=False)  # ce qui est réellement affiché
+    contenu_filtre = db.Column(db.Text, nullable=False)
     contient_infraction = db.Column(db.Boolean, default=False)
 
     date_envoi = db.Column(db.DateTime, default=datetime.utcnow)
@@ -225,7 +406,7 @@ class Avis(db.Model):
     producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
     acheteur_id = db.Column(db.Integer, db.ForeignKey("acheteurs.id"), nullable=False)
 
-    note = db.Column(db.Integer, nullable=False)  # de 1 à 5
+    note = db.Column(db.Integer, nullable=False)
     commentaire = db.Column(db.Text)
 
     date_avis = db.Column(db.DateTime, default=datetime.utcnow)
@@ -270,9 +451,9 @@ class TicketSupport(db.Model):
     telephone = db.Column(db.String(20), nullable=False)
     sujet = db.Column(db.String(150))
     message = db.Column(db.Text, nullable=False)
-    type_compte = db.Column(db.String(20))  # "producteur", "acheteur", "livreur" ou "visiteur"
+    type_compte = db.Column(db.String(20))
 
-    statut = db.Column(db.String(20), default="ouvert")  # "ouvert" ou "traite"
+    statut = db.Column(db.String(20), default="ouvert")
     date_creation = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -297,27 +478,24 @@ class Commande(db.Model):
     produit_id = db.Column(db.Integer, db.ForeignKey("produits.id"), nullable=False)
     livreur_id = db.Column(db.Integer, db.ForeignKey("livreurs.id"))
 
-    panier_id = db.Column(db.String(20))  # regroupe plusieurs commandes validées en un seul panier multi-vendeurs
+    panier_id = db.Column(db.String(20))
 
     quantite = db.Column(db.Float, nullable=False)
-    prix_total = db.Column(db.Float, nullable=False)  # avant commission
-    commission_taux = db.Column(db.Float, default=0.08)  # 8% par défaut
+    prix_total = db.Column(db.Float, nullable=False)
+    commission_taux = db.Column(db.Float, default=0.08)
     commission_montant = db.Column(db.Float)
-    montant_producteur = db.Column(db.Float)  # ce que le producteur reçoit
+    montant_producteur = db.Column(db.Float)
 
     statut = db.Column(db.String(30), default="en_attente")
-    # en_attente -> confirmee_producteur -> livree -> terminee / annulee
 
-    # Position de livraison choisie par l'acheteur à la commande
     latitude_livraison = db.Column(db.Float)
     longitude_livraison = db.Column(db.Float)
 
-    # Suivi en direct : dernière position partagée par le livreur (ou le producteur) pour cette commande
     latitude_livreur = db.Column(db.Float)
     longitude_livreur = db.Column(db.Float)
     position_livreur_maj = db.Column(db.DateTime)
 
-    reference_paiement = db.Column(db.String(100))  # id transaction CinetPay/PayDunya
+    reference_paiement = db.Column(db.String(100))
     date_commande = db.Column(db.DateTime, default=datetime.utcnow)
 
     acheteur = db.relationship("Acheteur", backref="commandes")
