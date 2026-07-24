@@ -34,6 +34,9 @@ class Producteur(db.Model):
 
     push_token = db.Column(db.String(255))
 
+    premium = db.Column(db.Boolean, default=False)
+    credits_outils = db.Column(db.Integer, default=10)
+
     actif = db.Column(db.Boolean, default=True)
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -59,6 +62,8 @@ class Producteur(db.Model):
             "verifie": self.verifie,
             "code_parrainage": self.code_parrainage,
             "nombre_filleuls": self.nombre_filleuls,
+            "premium": self.premium,
+            "credits_outils": self.credits_outils,
             "actif": self.actif,
             "date_inscription": self.date_inscription.isoformat(),
             "nombre_produits": len(self.produits),
@@ -299,6 +304,30 @@ class Terrain(db.Model):
             "verifie_admin": self.verifie_admin,
             "actif": self.actif,
             "date_ajout": self.date_ajout.isoformat(),
+        }
+
+
+class CodePremium(db.Model):
+    """Code à usage unique permettant de débloquer le premium sans passer par le paiement en ligne."""
+    __tablename__ = "codes_premium"
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(20), unique=True, nullable=False)
+    utilise = db.Column(db.Boolean, default=False)
+    producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"))
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+    date_utilisation = db.Column(db.DateTime)
+
+    producteur = db.relationship("Producteur")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "code": self.code,
+            "utilise": self.utilise,
+            "producteur_nom": self.producteur.nom if self.producteur else None,
+            "date_creation": self.date_creation.isoformat(),
+            "date_utilisation": self.date_utilisation.isoformat() if self.date_utilisation else None,
         }
 
 
