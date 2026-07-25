@@ -4,7 +4,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from models import (
     db, Producteur, Produit, Acheteur, Commande, Message, Avis, Favori, TicketSupport,
     Livreur, HistoriquePrix, AchatGroupe, ParticipationGroupe, BesoinFinancement,
-    PromesseFinancement, Terrain, CodePremium,
+    PromesseFinancement, Terrain, CodePremium, NotairePartenaire,
 )
 import os
 import re
@@ -748,6 +748,59 @@ def promettre_financement(besoin_id):
         )
 
     return jsonify({"message": "Promesse enregistrée", "financement": besoin.to_dict()}), 201
+
+
+# ---------- NOTAIRES PARTENAIRES (terrains uniquement) ----------
+
+@app.route("/api/notaires-partenaires", methods=["GET"])
+def lister_notaires_partenaires():
+    pays = request.args.get("pays")
+    query = NotairePartenaire.query.filter_by(actif=True)
+    if pays:
+        query = query.filter_by(pays=pays)
+    return jsonify([n.to_dict() for n in query.all()])
+
+
+@app.route("/api/admin/notaires-partenaires", methods=["POST"])
+def admin_ajouter_notaire():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    data = request.get_json()
+    if not data.get("nom"):
+        return jsonify({"erreur": "Le nom du notaire est requis"}), 400
+    notaire = NotairePartenaire(
+        nom=data["nom"], ville=data.get("ville", ""), pays=data.get("pays", ""),
+        contact=data.get("contact", ""),
+    )
+    db.session.add(notaire)
+    db.session.commit()
+    return jsonify({"message": "Notaire ajouté", "notaire": notaire.to_dict()}), 201
+
+
+@app.route("/api/admin/notaires-partenaires", methods=["GET"])
+def admin_lister_notaires():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    notaires = NotairePartenaire.query.order_by(NotairePartenaire.date_ajout.desc()).all()
+    return jsonify([n.to_dict() for n in notaires])
+
+
+@app.route("/api/terrains/<int:terrain_id>/proposer-notaire", methods=["PUT"])
+def proposer_notaire_acheteur(terrain_id):
+    """L'acheteur propose son propre notaire pour la transaction du terrain."""
+    terrain = Terrain.query.get_or_404(terrain_id)
+    data = request.get_json()
+    if not data.get("nom"):
+        return jsonify({"erreur": "Le nom du notaire est requis"}), 400
+    terrain.notaire_propose_acheteur_nom = data["nom"]
+    terrain.notaire_propose_acheteur_contact = data.get("contact", "")
+    db.session.commit()
+    if terrain.producteur:
+        envoyer_notification_push(
+            terrain.producteur.push_token, "Notaire proposé",
+            f"Un acheteur a proposé un notaire pour ton terrain « {terrain.titre} ».",
+        )
+    return jsonify({"message": "Notaire proposé", "terrain": terrain.to_dict()})
 
 
 # ---------- TERRAINS VÉRIFIÉS ----------
