@@ -5,7 +5,7 @@ from models import (
     db, Producteur, Produit, Acheteur, Commande, Message, Avis, Favori, TicketSupport,
     Livreur, HistoriquePrix, AchatGroupe, ParticipationGroupe, BesoinFinancement,
     PromesseFinancement, Terrain, CodePremium, NotairePartenaire, Beneficiaire, TransfertArgent,
-    TrajetPoint, RecolteFuture, ReservationRecolte,
+    TrajetPoint, RecolteFuture, ReservationRecolte, Cooperative, MembreCooperative, Invendu, Signalement,
 )
 import os
 import re
@@ -538,7 +538,22 @@ def ajouter_produit(producteur_id):
     db.session.commit()
     db.session.add(HistoriquePrix(produit_id=produit.id, prix=produit.prix_unitaire))
     db.session.commit()
-    return jsonify({"message": "Produit ajouté", "produit": produit.to_dict()}), 201
+
+    reponse = {"message": "Produit ajouté", "produit": produit.to_dict()}
+    autres_prix = [
+        p.prix_unitaire for p in Produit.query.filter_by(categorie=data["categorie"], actif=True).all()
+        if p.id != produit.id
+    ]
+    if len(autres_prix) >= 3:
+        moyenne = sum(autres_prix) / len(autres_prix)
+        if produit.prix_unitaire < moyenne * 0.7:
+            pourcentage = round((1 - produit.prix_unitaire / moyenne) * 100)
+            reponse["alerte_prix"] = (
+                f"Ce prix est {pourcentage}% en dessous de la moyenne du marché pour cette catégorie "
+                f"(environ {round(moyenne)} FCFA). Es-tu sûr de vouloir vendre à ce prix ?"
+            )
+
+    return jsonify(reponse), 201
 
 
 @app.route("/api/producteurs/<int:producteur_id>/produits", methods=["GET"])
@@ -603,6 +618,148 @@ def lister_produits_export():
     """Produits signalés par leurs producteurs comme disponibles pour l'export international."""
     produits = Produit.query.filter_by(actif=True, disponible_export=True).all()
     return jsonify([p.to_dict() for p in produits])
+
+
+# ---------- COOPÉRATIVES VIRTUELLES ----------
+
+@app.route("/api/producteurs/<int:producteur_id>/cooperatives", methods=["POST"])
+def creer_cooperative(producteur_id):
+    createur = Producteur.query.get_or_404(producteur_id)
+    data = request.get_json()
+    if not data.get("nom"):
+        return jsonify({"erreur": "Le nom de la coopérative est requis"}), 400
+    cooperative = Cooperative(
+        nom=data["nom"], description=data.get("description", ""),
+        pays=createur.pays, ville=data.get("ville", createur.ville), createur_id=producteur_id,
+    )
+    db.session.add(cooperative)
+    db.session.commit()
+    db.session.add(MembreCooperative(cooperative_id=cooperative.id, producteur_id=producteur_id))
+    db.session.commit()
+    return jsonify({"message": "Coopérative créée", "cooperative": cooperative.to_dict()}), 201
+
+
+@app.route("/api/cooperatives", methods=["GET"])
+def lister_cooperatives():
+    pays = request.args.get("pays")
+    query = Cooperative.query
+    if pays:
+        query = query.filter_by(pays=pays)
+    cooperatives = query.order_by(Cooperative.date_creation.desc()).all()
+    return jsonify([c.to_dict() for c in cooperatives])
+
+
+@app.route("/api/cooperatives/<int:cooperative_id>", methods=["GET"])
+def obtenir_cooperative(cooperative_id):
+    cooperative = Cooperative.query.get_or_404(cooperative_id)
+    resultat = cooperative.to_dict()
+    resultat["membres"] = [m.to_dict() for m in cooperative.membres]
+    return jsonify(resultat)
+
+
+@app.route("/api/cooperatives/<int:cooperative_id>/rejoindre", methods=["POST"])
+def rejoindre_cooperative(cooperative_id):
+    cooperative = Cooperative.query.get_or_404(cooperative_id)
+    data = request.get_json()
+    producteur_id = data.get("producteur_id")
+    if not producteur_id:
+        return jsonify({"erreur": "producteur_id requis"}), 400
+    Producteur.query.get_or_404(producteur_id)
+    if MembreCooperative.query.filter_by(cooperative_id=cooperative_id, producteur_id=producteur_id).first():
+        return jsonify({"message": "Déjà membre"}), 200
+    db.session.add(MembreCooperative(cooperative_id=cooperative_id, producteur_id=producteur_id))
+    db.session.commit()
+    return jsonify({"message": "Tu as rejoint la coopérative", "cooperative": cooperative.to_dict()}), 201
+
+
+@app.route("/api/producteurs/<int:producteur_id>/cooperatives", methods=["GET"])
+def cooperatives_du_producteur(producteur_id):
+    Producteur.query.get_or_404(producteur_id)
+    memberships = MembreCooperative.query.filter_by(producteur_id=producteur_id).all()
+    return jsonify([m.cooperative.to_dict() for m in memberships if m.cooperative])
+
+
+# ---------- BOURSE AUX INVENDUS / DONS ----------
+
+@app.route("/api/producteurs/<int:producteur_id>/invendus", methods=["POST"])
+def creer_invendu(producteur_id):
+    Producteur.query.get_or_404(producteur_id)
+    data = request.get_json()
+    champs_requis = ["nom", "quantite"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    invendu = Invendu(
+        producteur_id=producteur_id, nom=data["nom"], quantite=data["quantite"],
+        unite=data.get("unite", "kg"), prix_reduit=data.get("prix_reduit", 0),
+        description=data.get("description", ""),
+    )
+    db.session.add(invendu)
+    db.session.commit()
+    return jsonify({"message": "Invendu publié", "invendu": invendu.to_dict()}), 201
+
+
+@app.route("/api/invendus", methods=["GET"])
+def lister_invendus():
+    invendus = Invendu.query.filter_by(actif=True).order_by(Invendu.date_ajout.desc()).all()
+    return jsonify([i.to_dict() for i in invendus])
+
+
+@app.route("/api/invendus/<int:invendu_id>/reserver", methods=["PUT"])
+def reserver_invendu(invendu_id):
+    invendu = Invendu.query.get_or_404(invendu_id)
+    if not invendu.actif:
+        return jsonify({"erreur": "Cet invendu n'est plus disponible"}), 409
+    data = request.get_json()
+    acheteur_id = data.get("acheteur_id")
+    if not acheteur_id:
+        return jsonify({"erreur": "acheteur_id requis"}), 400
+    acheteur = Acheteur.query.get_or_404(acheteur_id)
+    invendu.actif = False
+    db.session.commit()
+    if invendu.producteur:
+        envoyer_notification_push(
+            invendu.producteur.push_token, "Invendu réservé",
+            f"{acheteur.nom} a réservé « {invendu.nom} ». Contacte-le pour organiser la remise.",
+        )
+    return jsonify({"message": "Réservé", "invendu": invendu.to_dict()})
+
+
+# ---------- SIGNALEMENTS COMMUNAUTAIRES (anti-arnaque) ----------
+
+@app.route("/api/signalements", methods=["POST"])
+def creer_signalement():
+    data = request.get_json()
+    champs_requis = ["signale_type", "signale_id", "motif"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    signalement = Signalement(
+        signale_type=data["signale_type"], signale_id=data["signale_id"], signale_nom=data.get("signale_nom", ""),
+        signale_par_nom=data.get("signale_par_nom", ""), signale_par_telephone=data.get("signale_par_telephone", ""),
+        motif=data["motif"], description=data.get("description", ""),
+    )
+    db.session.add(signalement)
+    db.session.commit()
+    return jsonify({"message": "Signalement enregistré, notre équipe va l'examiner", "signalement": signalement.to_dict()}), 201
+
+
+@app.route("/api/admin/signalements", methods=["GET"])
+def admin_lister_signalements():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    signalements = Signalement.query.order_by(Signalement.date_creation.desc()).all()
+    return jsonify([s.to_dict() for s in signalements])
+
+
+@app.route("/api/admin/signalements/<int:signalement_id>/statut", methods=["PUT"])
+def admin_modifier_statut_signalement(signalement_id):
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    signalement = Signalement.query.get_or_404(signalement_id)
+    signalement.statut = request.get_json().get("statut", "traite")
+    db.session.commit()
+    return jsonify({"message": "Statut mis à jour", "signalement": signalement.to_dict()})
 
 
 # ---------- RÉCOLTES FUTURES (pré-commande avant disponibilité) ----------
