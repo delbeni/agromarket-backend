@@ -617,6 +617,24 @@ class TicketSupport(db.Model):
         }
 
 
+class TrajetPoint(db.Model):
+    """Un point GPS horodaté du trajet réel parcouru pendant une livraison (traçabilité)."""
+    __tablename__ = "trajet_points"
+
+    id = db.Column(db.Integer, primary_key=True)
+    commande_id = db.Column(db.Integer, db.ForeignKey("commandes.id"), nullable=False)
+    latitude = db.Column(db.Float, nullable=False)
+    longitude = db.Column(db.Float, nullable=False)
+    horodatage = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "horodatage": self.horodatage.isoformat(),
+        }
+
+
 class Commande(db.Model):
     """Commande passée par un acheteur pour un produit."""
     __tablename__ = "commandes"
@@ -669,6 +687,8 @@ class Commande(db.Model):
             "produit_unite": self.produit.unite if self.produit else None,
             "producteur_id": self.produit.producteur_id if self.produit else None,
             "producteur_nom": self.produit.producteur.nom if self.produit and self.produit.producteur else None,
+            "producteur_latitude": self.produit.producteur.latitude if self.produit and self.produit.producteur else None,
+            "producteur_longitude": self.produit.producteur.longitude if self.produit and self.produit.producteur else None,
             "livreur_id": self.livreur_id,
             "livreur_nom": self.livreur.nom if self.livreur else None,
             "panier_id": self.panier_id,
