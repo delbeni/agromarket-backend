@@ -5,7 +5,7 @@ from models import (
     db, Producteur, Produit, Acheteur, Commande, Message, Avis, Favori, TicketSupport,
     Livreur, HistoriquePrix, AchatGroupe, ParticipationGroupe, BesoinFinancement,
     PromesseFinancement, Terrain, CodePremium, NotairePartenaire, Beneficiaire, TransfertArgent,
-    TrajetPoint,
+    TrajetPoint, RecolteFuture, ReservationRecolte,
 )
 import os
 import re
@@ -603,6 +603,99 @@ def lister_produits_export():
     """Produits signalés par leurs producteurs comme disponibles pour l'export international."""
     produits = Produit.query.filter_by(actif=True, disponible_export=True).all()
     return jsonify([p.to_dict() for p in produits])
+
+
+# ---------- RÉCOLTES FUTURES (pré-commande avant disponibilité) ----------
+
+@app.route("/api/producteurs/<int:producteur_id>/recoltes-futures", methods=["POST"])
+def creer_recolte_future(producteur_id):
+    Producteur.query.get_or_404(producteur_id)
+    data = request.get_json()
+    champs_requis = ["nom", "categorie", "quantite_estimee", "prix_unitaire_prevu"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if data["categorie"] not in CATEGORIES:
+        return jsonify({"erreur": f"Catégorie invalide. Options: {', '.join(CATEGORIES)}"}), 400
+
+    date_recolte = None
+    if data.get("date_recolte_prevue"):
+        try:
+            date_recolte = datetime.strptime(data["date_recolte_prevue"], "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"erreur": "Format de date invalide (AAAA-MM-JJ attendu)"}), 400
+
+    recolte = RecolteFuture(
+        producteur_id=producteur_id, nom=data["nom"], categorie=data["categorie"],
+        quantite_estimee=data["quantite_estimee"], unite=data.get("unite", "sac"),
+        prix_unitaire_prevu=data["prix_unitaire_prevu"], date_recolte_prevue=date_recolte,
+        description=data.get("description", ""),
+    )
+    db.session.add(recolte)
+    db.session.commit()
+    return jsonify({"message": "Récolte future annoncée", "recolte": recolte.to_dict()}), 201
+
+
+@app.route("/api/recoltes-futures", methods=["GET"])
+def lister_recoltes_futures():
+    recoltes = RecolteFuture.query.filter_by(statut="ouvert").order_by(RecolteFuture.date_creation.desc()).all()
+    return jsonify([r.to_dict() for r in recoltes])
+
+
+@app.route("/api/producteurs/<int:producteur_id>/recoltes-futures", methods=["GET"])
+def recoltes_futures_du_producteur(producteur_id):
+    Producteur.query.get_or_404(producteur_id)
+    recoltes = RecolteFuture.query.filter_by(producteur_id=producteur_id).order_by(RecolteFuture.date_creation.desc()).all()
+    return jsonify([r.to_dict() for r in recoltes])
+
+
+@app.route("/api/recoltes-futures/<int:recolte_id>", methods=["GET"])
+def obtenir_recolte_future(recolte_id):
+    recolte = RecolteFuture.query.get_or_404(recolte_id)
+    resultat = recolte.to_dict()
+    resultat["reservations"] = [r.to_dict() for r in recolte.reservations]
+    return jsonify(resultat)
+
+
+@app.route("/api/recoltes-futures/<int:recolte_id>/reserver", methods=["POST"])
+def reserver_recolte_future(recolte_id):
+    recolte = RecolteFuture.query.get_or_404(recolte_id)
+    if recolte.statut != "ouvert":
+        return jsonify({"erreur": "Cette récolte future n'est plus ouverte aux réservations"}), 409
+    data = request.get_json()
+    champs_requis = ["acheteur_id", "quantite"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    acheteur = Acheteur.query.get_or_404(data["acheteur_id"])
+    quantite = data["quantite"]
+    if not isinstance(quantite, (int, float)) or quantite <= 0:
+        return jsonify({"erreur": "Quantité invalide"}), 400
+
+    reservation = ReservationRecolte(recolte_id=recolte_id, acheteur_id=data["acheteur_id"], quantite=quantite)
+    db.session.add(reservation)
+    db.session.commit()
+
+    if recolte.producteur:
+        envoyer_notification_push(
+            recolte.producteur.push_token, "Réservation de récolte future",
+            f"{acheteur.nom} a réservé {quantite} {recolte.unite} de {recolte.nom}.",
+        )
+        envoyer_sms(
+            recolte.producteur.telephone, recolte.producteur.pays,
+            f"AgriChange : {acheteur.nom} a réservé {quantite} {recolte.unite} de ta future récolte de {recolte.nom}.",
+        )
+
+    return jsonify({"message": "Réservation enregistrée", "recolte": recolte.to_dict()}), 201
+
+
+@app.route("/api/recoltes-futures/<int:recolte_id>/cloturer", methods=["PUT"])
+def cloturer_recolte_future(recolte_id):
+    recolte = RecolteFuture.query.get_or_404(recolte_id)
+    recolte.statut = "clos"
+    db.session.commit()
+    return jsonify({"message": "Récolte future clôturée", "recolte": recolte.to_dict()})
 
 
 # ---------- ACHATS GROUPÉS ----------
