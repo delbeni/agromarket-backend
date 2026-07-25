@@ -627,6 +627,7 @@ class Beneficiaire(db.Model):
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
 
     transferts_recus = db.relationship("TransfertArgent", backref="destinataire", lazy=True)
+    numeros_mobile_money = db.relationship("NumeroMobileMoney", backref="beneficiaire", lazy=True)
 
     def to_dict(self):
         return {
@@ -637,8 +638,22 @@ class Beneficiaire(db.Model):
             "ville": self.ville,
             "operateur_mobile_money": self.operateur_mobile_money,
             "numero_mobile_money": self.numero_mobile_money,
+            "numeros_mobile_money": [n.to_dict() for n in self.numeros_mobile_money],
             "date_inscription": self.date_inscription.isoformat(),
         }
+
+
+class NumeroMobileMoney(db.Model):
+    """Numéro Mobile Money supplémentaire d'un bénéficiaire (il peut en avoir plusieurs, sur des réseaux différents)."""
+    __tablename__ = "numeros_mobile_money"
+
+    id = db.Column(db.Integer, primary_key=True)
+    beneficiaire_id = db.Column(db.Integer, db.ForeignKey("beneficiaires.id"), nullable=False)
+    operateur = db.Column(db.String(30), nullable=False)  # Orange Money, MTN Money, Wave, Moov Money, Autre
+    numero = db.Column(db.String(30), nullable=False)
+
+    def to_dict(self):
+        return {"id": self.id, "operateur": self.operateur, "numero": self.numero}
 
 
 class TransfertArgent(db.Model):
@@ -852,7 +867,7 @@ class Commande(db.Model):
 
     quantite = db.Column(db.Float, nullable=False)
     prix_total = db.Column(db.Float, nullable=False)
-    commission_taux = db.Column(db.Float, default=0.08)
+    commission_taux = db.Column(db.Float, default=0.08)  # 8% AgriChange + ~3,5% CinetPay = ~11,5% au total
     commission_montant = db.Column(db.Float)
     montant_producteur = db.Column(db.Float)
 
