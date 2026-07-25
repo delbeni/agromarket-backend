@@ -6,6 +6,7 @@ from models import (
     Livreur, HistoriquePrix, AchatGroupe, ParticipationGroupe, BesoinFinancement,
     PromesseFinancement, Terrain, CodePremium, NotairePartenaire, Beneficiaire, TransfertArgent,
     TrajetPoint, RecolteFuture, ReservationRecolte, Cooperative, MembreCooperative, Invendu, Signalement,
+    NumeroMobileMoney,
 )
 import os
 import re
@@ -1022,7 +1023,35 @@ def inscription_beneficiaire():
     )
     db.session.add(beneficiaire)
     db.session.commit()
+
+    if data.get("operateur_mobile_money") and data.get("numero_mobile_money"):
+        db.session.add(NumeroMobileMoney(
+            beneficiaire_id=beneficiaire.id,
+            operateur=data["operateur_mobile_money"], numero=data["numero_mobile_money"],
+        ))
+        db.session.commit()
+
     return jsonify({"message": "Compte bénéficiaire créé", "beneficiaire": beneficiaire.to_dict()}), 201
+
+
+@app.route("/api/beneficiaires/<int:beneficiaire_id>/numeros", methods=["POST"])
+def ajouter_numero_mobile_money(beneficiaire_id):
+    Beneficiaire.query.get_or_404(beneficiaire_id)
+    data = request.get_json()
+    if not data.get("operateur") or not data.get("numero"):
+        return jsonify({"erreur": "operateur et numero requis"}), 400
+    numero = NumeroMobileMoney(beneficiaire_id=beneficiaire_id, operateur=data["operateur"], numero=data["numero"])
+    db.session.add(numero)
+    db.session.commit()
+    return jsonify({"message": "Numéro ajouté", "numero": numero.to_dict()}), 201
+
+
+@app.route("/api/beneficiaires/<int:beneficiaire_id>/numeros/<int:numero_id>", methods=["DELETE"])
+def supprimer_numero_mobile_money(beneficiaire_id, numero_id):
+    numero = NumeroMobileMoney.query.filter_by(id=numero_id, beneficiaire_id=beneficiaire_id).first_or_404()
+    db.session.delete(numero)
+    db.session.commit()
+    return jsonify({"message": "Numéro supprimé"})
 
 
 @app.route("/api/beneficiaires/connexion", methods=["POST"])
