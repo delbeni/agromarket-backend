@@ -94,6 +94,8 @@ class Produit(db.Model):
     video_url = db.Column(db.String(500))
     description = db.Column(db.Text)
 
+    disponible_export = db.Column(db.Boolean, default=False)  # signalé par le producteur pour l'export international
+
     actif = db.Column(db.Boolean, default=True)
     date_ajout = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -129,6 +131,7 @@ class Produit(db.Model):
             "photos_urls": photos,
             "video_url": self.video_url,
             "description": self.description,
+            "disponible_export": self.disponible_export,
             "actif": self.actif,
         }
 
