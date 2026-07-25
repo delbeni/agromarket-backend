@@ -197,7 +197,7 @@ def inscription_producteur():
 
     envoyer_sms(
         producteur.telephone, producteur.pays,
-        f"Bienvenue sur AgroMarket, {producteur.nom} ! Ton compte producteur est créé. Ajoute tes produits pour commencer à vendre.",
+        f"Bienvenue sur AgriChange, {producteur.nom} ! Ton compte producteur est créé. Ajoute tes produits pour commencer à vendre.",
     )
 
     return jsonify({"message": "Compte producteur créé", "producteur": producteur.to_dict()}), 201
@@ -669,7 +669,7 @@ def participer_achat_groupe(achat_groupe_id):
             )
             envoyer_sms(
                 campagne.produit.producteur.telephone, campagne.produit.producteur.pays,
-                f"AgroMarket : ton achat groupé pour {campagne.produit.nom} a atteint son objectif ! Les commandes sont créées.",
+                f"AgriChange : ton achat groupé pour {campagne.produit.nom} a atteint son objectif ! Les commandes sont créées.",
             )
 
     return jsonify({"message": "Participation enregistrée", "achat_groupe": campagne.to_dict()}), 201
@@ -736,7 +736,7 @@ def promettre_financement(besoin_id):
         )
         envoyer_sms(
             besoin.producteur.telephone, besoin.producteur.pays,
-            f"AgroMarket : quelqu'un s'est engagé à te soutenir pour « {besoin.titre} ». Ouvre l'app pour voir le détail.",
+            f"AgriChange : quelqu'un s'est engagé à te soutenir pour « {besoin.titre} ». Ouvre l'app pour voir le détail.",
         )
 
     return jsonify({"message": "Promesse enregistrée", "financement": besoin.to_dict()}), 201
@@ -875,7 +875,7 @@ def creer_commande():
         envoyer_notification_push(produit.producteur.push_token, "Nouvelle commande reçue",
                                    f"{acheteur.nom} a commandé {produit.nom}")
         envoyer_sms(produit.producteur.telephone, produit.producteur.pays,
-                    f"AgroMarket : nouvelle commande de {acheteur.nom} pour {produit.nom}. Ouvre l'app pour confirmer.")
+                    f"AgriChange : nouvelle commande de {acheteur.nom} pour {produit.nom}. Ouvre l'app pour confirmer.")
     return jsonify({"message": "Commande créée", "commande": commande.to_dict()}), 201
 
 
@@ -932,7 +932,7 @@ def commander_panier():
             envoyer_notification_push(commande.produit.producteur.push_token, "Nouvelle commande reçue",
                                        f"{acheteur.nom} a commandé {commande.produit.nom}")
             envoyer_sms(commande.produit.producteur.telephone, commande.produit.producteur.pays,
-                        f"AgroMarket : nouvelle commande de {acheteur.nom} pour {commande.produit.nom}. Ouvre l'app pour confirmer.")
+                        f"AgriChange : nouvelle commande de {acheteur.nom} pour {commande.produit.nom}. Ouvre l'app pour confirmer.")
 
     return jsonify({
         "message": "Panier validé", "panier_id": panier_id,
@@ -1009,7 +1009,7 @@ def annuler_commande(commande_id):
         )
         envoyer_sms(
             producteur.telephone, producteur.pays,
-            f"AgroMarket : commande annulée pour {commande.produit.nom}. Récupère le colis auprès du livreur et confirme le retour dans l'app.",
+            f"AgriChange : commande annulée pour {commande.produit.nom}. Récupère le colis auprès du livreur et confirme le retour dans l'app.",
         )
         envoyer_notification_push(
             commande.livreur.push_token, "Livraison annulée",
@@ -1041,7 +1041,7 @@ def confirmer_retour_colis(commande_id):
         )
         envoyer_sms(
             commande.livreur.telephone, commande.livreur.pays,
-            f"AgroMarket : retour de colis confirmé. Tes frais de livraison ({commande.frais_livraison or 0} FCFA) sont dus et te seront versés dès l'activation du paiement en ligne.",
+            f"AgriChange : retour de colis confirmé. Tes frais de livraison ({commande.frais_livraison or 0} FCFA) sont dus et te seront versés dès l'activation du paiement en ligne.",
         )
 
     return jsonify({"message": "Retour confirmé, livreur indemnisé", "commande": commande.to_dict()})
