@@ -5,6 +5,7 @@ from models import (
     db, Producteur, Produit, Acheteur, Commande, Message, Avis, Favori, TicketSupport,
     Livreur, HistoriquePrix, AchatGroupe, ParticipationGroupe, BesoinFinancement,
     PromesseFinancement, Terrain, CodePremium, NotairePartenaire, Beneficiaire, TransfertArgent,
+    TrajetPoint,
 )
 import os
 import re
@@ -1118,8 +1119,17 @@ def mettre_a_jour_position_livreur(commande_id):
     commande.latitude_livreur = latitude
     commande.longitude_livreur = longitude
     commande.position_livreur_maj = datetime.utcnow()
+    db.session.add(TrajetPoint(commande_id=commande_id, latitude=latitude, longitude=longitude))
     db.session.commit()
     return jsonify({"message": "Position mise à jour", "commande": commande.to_dict()})
+
+
+@app.route("/api/commandes/<int:commande_id>/trajet", methods=["GET"])
+def obtenir_trajet_livraison(commande_id):
+    """Trace complète des positions GPS enregistrées pendant la livraison, pour la traçabilité."""
+    Commande.query.get_or_404(commande_id)
+    points = TrajetPoint.query.filter_by(commande_id=commande_id).order_by(TrajetPoint.horodatage.asc()).all()
+    return jsonify([p.to_dict() for p in points])
 
 
 @app.route("/api/acheteurs/<int:acheteur_id>/commandes", methods=["GET"])
