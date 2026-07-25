@@ -12,6 +12,7 @@ import json
 import secrets
 import urllib.request
 import urllib.parse
+import math
 from datetime import datetime
 
 app = Flask(__name__)
@@ -119,6 +120,21 @@ def envoyer_notification_push(token, titre, corps, donnees=None):
         pass
 
 
+def distance_km(lat1, lon1, lat2, lon2):
+    """Distance à vol d'oiseau entre deux points GPS, en kilomètres (formule de haversine)."""
+    if None in (lat1, lon1, lat2, lon2):
+        return None
+    rayon_terre = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return round(rayon_terre * c, 1)
+
+
 REGEX_NUMERO = re.compile(r"(\d[\s.\-]?){8,}")
 MOTS_CLES_CONTOURNEMENT = [
     "whatsapp", "whats app", "appelle moi", "appelle-moi", "mon numero",
@@ -167,6 +183,8 @@ def inscription_producteur():
         type_production=data.get("type_production", ""),
         description=data.get("description", ""),
         photo_url=data.get("photo_url", ""), histoire=data.get("histoire", ""),
+        piece_identite_recto=data.get("piece_identite_recto", ""),
+        piece_identite_verso=data.get("piece_identite_verso", ""),
         code_parrainage=generer_code_parrainage(),
         code_parrain_utilise=code_saisi if parrain else None,
     )
@@ -204,7 +222,8 @@ def modifier_producteur(producteur_id):
     producteur = Producteur.query.get_or_404(producteur_id)
     data = request.get_json()
     for champ in ["nom", "pays", "ville", "zone_livraison", "type_production", "description",
-                  "photo_url", "histoire", "latitude", "longitude"]:
+                  "photo_url", "histoire", "latitude", "longitude",
+                  "piece_identite_recto", "piece_identite_verso"]:
         if champ in data:
             setattr(producteur, champ, data[champ])
     db.session.commit()
@@ -281,6 +300,11 @@ def inscription_livreur():
         nom=data["nom"], telephone=data["telephone"],
         mot_de_passe_hash=generate_password_hash(data["mot_de_passe"]),
         pays=data["pays"], ville=data["ville"], vehicule=data.get("vehicule", ""),
+        marque_vehicule=data.get("marque_vehicule", ""),
+        plaque_immatriculation=data.get("plaque_immatriculation", ""),
+        couleur_vehicule=data.get("couleur_vehicule", ""),
+        piece_identite_recto=data.get("piece_identite_recto", ""),
+        piece_identite_verso=data.get("piece_identite_verso", ""),
     )
     db.session.add(livreur)
     db.session.commit()
@@ -307,6 +331,50 @@ def enregistrer_push_token_livreur(livreur_id):
     livreur.push_token = request.get_json().get("push_token", "")
     db.session.commit()
     return jsonify({"message": "Jeton enregistré"})
+
+
+@app.route("/api/livreurs/<int:livreur_id>/service", methods=["PUT"])
+def toggle_service_livreur(livreur_id):
+    """Le livreur se déclare disponible ('en service') ou non, visible par les acheteurs/vendeurs à proximité."""
+    livreur = Livreur.query.get_or_404(livreur_id)
+    livreur.en_service = bool(request.get_json().get("en_service", False))
+    db.session.commit()
+    return jsonify({"message": "Statut mis à jour", "livreur": livreur.to_dict()})
+
+
+@app.route("/api/livreurs/<int:livreur_id>/position-direct", methods=["PUT"])
+def mettre_a_jour_position_livreur_direct(livreur_id):
+    """Position en continu du livreur pendant qu'il est 'en service' (indépendante d'une commande précise)."""
+    livreur = Livreur.query.get_or_404(livreur_id)
+    data = request.get_json()
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    if latitude is None or longitude is None:
+        return jsonify({"erreur": "latitude et longitude requis"}), 400
+    livreur.latitude = latitude
+    livreur.longitude = longitude
+    livreur.position_maj = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"message": "Position mise à jour", "livreur": livreur.to_dict()})
+
+
+@app.route("/api/livreurs-proches", methods=["GET"])
+def livreurs_proches():
+    """Liste des livreurs actuellement 'en service', triés par distance si une position est fournie."""
+    latitude = request.args.get("latitude", type=float)
+    longitude = request.args.get("longitude", type=float)
+
+    livreurs = Livreur.query.filter_by(en_service=True, actif=True).all()
+    resultats = []
+    for l in livreurs:
+        d = l.to_dict()
+        d["distance_km"] = distance_km(latitude, longitude, l.latitude, l.longitude)
+        resultats.append(d)
+
+    if latitude is not None and longitude is not None:
+        resultats.sort(key=lambda d: (d["distance_km"] is None, d["distance_km"]))
+
+    return jsonify(resultats)
 
 
 @app.route("/api/livraisons-disponibles", methods=["GET"])
@@ -798,6 +866,7 @@ def creer_commande():
         acheteur_id=data["acheteur_id"], produit_id=data["produit_id"], quantite=quantite,
         prix_total=prix_total, statut="en_attente",
         latitude_livraison=data.get("latitude_livraison"), longitude_livraison=data.get("longitude_livraison"),
+        frais_livraison=data.get("frais_livraison") or 0,
     )
     commande.calculer_montants()
     db.session.add(commande)
@@ -824,6 +893,7 @@ def commander_panier():
     acheteur = Acheteur.query.get_or_404(data["acheteur_id"])
     latitude_livraison = data.get("latitude_livraison")
     longitude_livraison = data.get("longitude_livraison")
+    frais_livraison_total = data.get("frais_livraison") or 0
     panier_id = secrets.token_hex(4)
     commandes_creees = []
 
@@ -849,6 +919,11 @@ def commander_panier():
 
     if not commandes_creees:
         return jsonify({"erreur": "Aucun article valide dans le panier"}), 400
+
+    if frais_livraison_total:
+        part = round(frais_livraison_total / len(commandes_creees), 2)
+        for commande in commandes_creees:
+            commande.frais_livraison = part
 
     db.session.commit()
 
@@ -912,6 +987,64 @@ def modifier_statut_commande(commande_id):
         nom_produit = commande.produit.nom if commande.produit else "ta commande"
         envoyer_notification_push(commande.acheteur.push_token, "Mise à jour de ta commande", f"{nom_produit} : {label}")
     return jsonify({"message": "Statut mis à jour", "commande": commande.to_dict()})
+
+
+@app.route("/api/commandes/<int:commande_id>/annuler", methods=["PUT"])
+def annuler_commande(commande_id):
+    """Annule une commande. Si un livreur avait déjà pris le colis en charge, il reste
+    indemnisé une fois que le producteur confirme avoir récupéré le colis retourné."""
+    commande = Commande.query.get_or_404(commande_id)
+    if commande.statut in ("livree", "terminee", "annulee"):
+        return jsonify({"erreur": "Cette commande ne peut plus être annulée"}), 409
+
+    annule_par = request.get_json().get("annule_par", "inconnu") if request.get_json() else "inconnu"
+    commande.statut = "annulee"
+    db.session.commit()
+
+    if commande.livreur and commande.produit and commande.produit.producteur:
+        producteur = commande.produit.producteur
+        envoyer_notification_push(
+            producteur.push_token, "Commande annulée",
+            f"La commande « {commande.produit.nom} » a été annulée. Merci de récupérer le colis auprès du livreur et de confirmer le retour dans l'app.",
+        )
+        envoyer_sms(
+            producteur.telephone, producteur.pays,
+            f"AgroMarket : commande annulée pour {commande.produit.nom}. Récupère le colis auprès du livreur et confirme le retour dans l'app.",
+        )
+        envoyer_notification_push(
+            commande.livreur.push_token, "Livraison annulée",
+            "La commande a été annulée. Ramène le colis au vendeur ; tu seras indemnisé une fois le retour confirmé.",
+        )
+
+    return jsonify({"message": "Commande annulée", "commande": commande.to_dict()})
+
+
+@app.route("/api/commandes/<int:commande_id>/confirmer-retour", methods=["PUT"])
+def confirmer_retour_colis(commande_id):
+    """Le producteur confirme avoir récupéré le colis retourné après annulation :
+    le livreur reste indemnisé pour ses frais de livraison déjà engagés."""
+    commande = Commande.query.get_or_404(commande_id)
+    if commande.statut != "annulee":
+        return jsonify({"erreur": "Cette commande n'est pas annulée"}), 409
+    if not commande.livreur_id:
+        return jsonify({"erreur": "Aucun livreur n'était assigné à cette commande"}), 400
+
+    commande.retour_confirme = True
+    if commande.frais_livraison and commande.frais_livraison > 0:
+        commande.statut_paiement_livreur = "du"
+    db.session.commit()
+
+    if commande.livreur:
+        envoyer_notification_push(
+            commande.livreur.push_token, "Retour confirmé",
+            f"Le vendeur a confirmé la récupération du colis. Tes frais de livraison ({commande.frais_livraison or 0} FCFA) te seront versés dès l'activation du paiement en ligne.",
+        )
+        envoyer_sms(
+            commande.livreur.telephone, commande.livreur.pays,
+            f"AgroMarket : retour de colis confirmé. Tes frais de livraison ({commande.frais_livraison or 0} FCFA) sont dus et te seront versés dès l'activation du paiement en ligne.",
+        )
+
+    return jsonify({"message": "Retour confirmé, livreur indemnisé", "commande": commande.to_dict()})
 
 
 # ---------- MESSAGERIE ----------
