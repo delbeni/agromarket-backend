@@ -28,7 +28,7 @@ db.init_app(app)
 with app.app_context():
     db.create_all()
 
-PAYS_AUTORISES = ["Côte d'Ivoire", "Mali", "Burkina Faso", "Sénégal"]
+PAYS_AUTORISES = ["Côte d'Ivoire", "Mali", "Burkina Faso", "Sénégal", "Cameroun", "Togo", "Bénin", "Niger", "RDC", "Guinée"]
 CATEGORIES = ["cereales", "elevage", "maraichage", "transforme", "restaurant", "autre"]
 STATUTS_COMMANDE = ["en_attente", "confirmee_producteur", "livree", "terminee", "annulee"]
 
