@@ -257,6 +257,25 @@ class PromesseFinancement(db.Model):
         }
 
 
+class NotairePartenaire(db.Model):
+    """Notaire proposé par l'administration pour sécuriser les transactions de terrains."""
+    __tablename__ = "notaires_partenaires"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(150), nullable=False)
+    ville = db.Column(db.String(100))
+    pays = db.Column(db.String(50))
+    contact = db.Column(db.String(50))
+    actif = db.Column(db.Boolean, default=True)
+    date_ajout = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "nom": self.nom, "ville": self.ville, "pays": self.pays,
+            "contact": self.contact, "actif": self.actif,
+        }
+
+
 class Terrain(db.Model):
     """Annonce de terrain vérifié. Mise en relation uniquement : le paiement se fait
     obligatoirement chez un notaire partenaire vérifié, jamais dans l'application."""
@@ -280,6 +299,8 @@ class Terrain(db.Model):
 
     notaire_nom = db.Column(db.String(150))
     notaire_contact = db.Column(db.String(50))
+    notaire_propose_acheteur_nom = db.Column(db.String(150))
+    notaire_propose_acheteur_contact = db.Column(db.String(50))
 
     verifie_admin = db.Column(db.Boolean, default=False)
     actif = db.Column(db.Boolean, default=True)
@@ -309,6 +330,8 @@ class Terrain(db.Model):
             "photos_urls": photos,
             "notaire_nom": self.notaire_nom,
             "notaire_contact": self.notaire_contact,
+            "notaire_propose_acheteur_nom": self.notaire_propose_acheteur_nom,
+            "notaire_propose_acheteur_contact": self.notaire_propose_acheteur_contact,
             "verifie_admin": self.verifie_admin,
             "actif": self.actif,
             "date_ajout": self.date_ajout.isoformat(),
