@@ -49,6 +49,21 @@ class Producteur(db.Model):
     def to_dict(self):
         notes = [a.note for a in self.avis]
         note_moyenne = round(sum(notes) / len(notes), 1) if notes else None
+
+        toutes_commandes = [c for p in self.produits for c in p.commandes]
+        total_commandes = len(toutes_commandes)
+        commandes_reussies = len([c for c in toutes_commandes if c.statut in ("livree", "terminee")])
+        taux_livraison = round(commandes_reussies / total_commandes * 100) if total_commandes > 0 else None
+
+        anciennete_jours = (datetime.utcnow() - self.date_inscription).days
+        composantes = []
+        if taux_livraison is not None:
+            composantes.append(taux_livraison)
+        if note_moyenne is not None:
+            composantes.append(min(100, note_moyenne * 20))
+        composantes.append(min(100, anciennete_jours / 3))
+        score_confiance = round(sum(composantes) / len(composantes)) if composantes else None
+
         return {
             "id": self.id,
             "nom": self.nom,
@@ -74,6 +89,8 @@ class Producteur(db.Model):
             "nombre_produits": len(self.produits),
             "note_moyenne": note_moyenne,
             "nombre_avis": len(notes),
+            "score_confiance": score_confiance,
+            "taux_livraison": taux_livraison,
         }
 
 
@@ -118,6 +135,7 @@ class Produit(db.Model):
             "producteur_photo_url": self.producteur.photo_url if self.producteur else None,
             "producteur_histoire": self.producteur.histoire if self.producteur else None,
             "producteur_verifie": self.producteur.verifie if self.producteur else False,
+            "producteur_score_confiance": self.producteur.to_dict()["score_confiance"] if self.producteur else None,
             "producteur_note_moyenne": note_moyenne,
             "producteur_nombre_avis": len(notes),
             "producteur_latitude": self.producteur.latitude if self.producteur else None,
@@ -654,6 +672,126 @@ class TransfertArgent(db.Model):
             "statut": self.statut,
             "date_creation": self.date_creation.isoformat(),
         }
+
+
+class Cooperative(db.Model):
+    """Coopérative virtuelle : regroupement de producteurs pour négocier ensemble de plus gros volumes."""
+    __tablename__ = "cooperatives"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text)
+    pays = db.Column(db.String(50))
+    ville = db.Column(db.String(100))
+    createur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    createur = db.relationship("Producteur")
+    membres = db.relationship("MembreCooperative", backref="cooperative", lazy=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "nom": self.nom, "description": self.description,
+            "pays": self.pays, "ville": self.ville,
+            "createur_id": self.createur_id, "createur_nom": self.createur.nom if self.createur else None,
+            "nombre_membres": len(self.membres),
+            "date_creation": self.date_creation.isoformat(),
+        }
+
+
+class MembreCooperative(db.Model):
+    """Adhésion d'un producteur à une coopérative virtuelle."""
+    __tablename__ = "membres_cooperative"
+
+    id = db.Column(db.Integer, primary_key=True)
+    cooperative_id = db.Column(db.Integer, db.ForeignKey("cooperatives.id"), nullable=False)
+    producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+    date_adhesion = db.Column(db.DateTime, default=datetime.utcnow)
+
+    producteur = db.relationship("Producteur")
+
+    __table_args__ = (
+        db.UniqueConstraint("cooperative_id", "producteur_id", name="uq_membre_cooperative"),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id, "producteur_id": self.producteur_id,
+            "producteur_nom": self.producteur.nom if self.producteur else None,
+            "producteur_ville": self.producteur.ville if self.producteur else None,
+            "date_adhesion": self.date_adhesion.isoformat(),
+        }
+
+
+class Invendu(db.Model):
+    """Surplus ou invendu proposé à prix cassé, ou en don, pour éviter le gaspillage."""
+    __tablename__ = "invendus"
+
+    id = db.Column(db.Integer, primary_key=True)
+    producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+
+    nom = db.Column(db.String(150), nullable=False)
+    quantite = db.Column(db.Float, nullable=False)
+    unite = db.Column(db.String(20), default="kg")
+    prix_reduit = db.Column(db.Float, default=0)  # 0 = don gratuit
+    description = db.Column(db.Text)
+
+    actif = db.Column(db.Boolean, default=True)
+    date_ajout = db.Column(db.DateTime, default=datetime.utcnow)
+
+    producteur = db.relationship("Producteur")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "producteur_id": self.producteur_id,
+            "producteur_nom": self.producteur.nom if self.producteur else None,
+            "producteur_ville": self.producteur.ville if self.producteur else None,
+            "producteur_pays": self.producteur.pays if self.producteur else None,
+            "producteur_telephone": self.producteur.telephone if self.producteur else None,
+            "nom": self.nom,
+            "quantite": self.quantite,
+            "unite": self.unite,
+            "prix_reduit": self.prix_reduit,
+            "est_don": self.prix_reduit == 0,
+            "description": self.description,
+            "actif": self.actif,
+            "date_ajout": self.date_ajout.isoformat(),
+        }
+
+
+class Signalement(db.Model):
+    """Signalement communautaire d'un comportement suspect (anti-arnaque)."""
+    __tablename__ = "signalements"
+
+    id = db.Column(db.Integer, primary_key=True)
+    signale_type = db.Column(db.String(20), nullable=False)  # producteur / acheteur / livreur
+    signale_id = db.Column(db.Integer, nullable=False)
+    signale_nom = db.Column(db.String(150))
+
+    signale_par_nom = db.Column(db.String(120))
+    signale_par_telephone = db.Column(db.String(30))
+
+    motif = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text)
+
+    statut = db.Column(db.String(20), default="ouvert")  # ouvert / traite
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "signale_type": self.signale_type,
+            "signale_id": self.signale_id,
+            "signale_nom": self.signale_nom,
+            "signale_par_nom": self.signale_par_nom,
+            "signale_par_telephone": self.signale_par_telephone,
+            "motif": self.motif,
+            "description": self.description,
+            "statut": self.statut,
+            "date_creation": self.date_creation.isoformat(),
+        }
+
 
 
 class TicketSupport(db.Model):
