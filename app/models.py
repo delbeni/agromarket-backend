@@ -522,6 +522,74 @@ class Favori(db.Model):
     )
 
 
+class Beneficiaire(db.Model):
+    """Personne inscrite uniquement pour recevoir des transferts d'argent libres (diaspora -> Afrique),
+    sans forcément être producteur, acheteur ou livreur sur AgriChange."""
+    __tablename__ = "beneficiaires"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(120), nullable=False)
+    telephone = db.Column(db.String(20), unique=True, nullable=False)
+    mot_de_passe_hash = db.Column(db.String(255), nullable=False)
+
+    pays = db.Column(db.String(50), nullable=False)
+    ville = db.Column(db.String(100))
+
+    operateur_mobile_money = db.Column(db.String(30))  # Orange Money, MTN Money, Wave, Moov Money, Autre
+    numero_mobile_money = db.Column(db.String(30))
+
+    push_token = db.Column(db.String(255))
+    actif = db.Column(db.Boolean, default=True)
+    date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
+
+    transferts_recus = db.relationship("TransfertArgent", backref="destinataire", lazy=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "nom": self.nom,
+            "telephone": self.telephone,
+            "pays": self.pays,
+            "ville": self.ville,
+            "operateur_mobile_money": self.operateur_mobile_money,
+            "numero_mobile_money": self.numero_mobile_money,
+            "date_inscription": self.date_inscription.isoformat(),
+        }
+
+
+class TransfertArgent(db.Model):
+    """Transfert d'argent libre (diaspora -> Afrique), sans lien avec un achat de produit.
+    Le montant est enregistré ; le versement réel se fait dès l'activation du paiement en ligne."""
+    __tablename__ = "transferts_argent"
+
+    id = db.Column(db.Integer, primary_key=True)
+    destinataire_id = db.Column(db.Integer, db.ForeignKey("beneficiaires.id"), nullable=False)
+
+    expediteur_nom = db.Column(db.String(120), nullable=False)
+    expediteur_telephone = db.Column(db.String(30))
+    expediteur_pays = db.Column(db.String(50))
+
+    montant = db.Column(db.Float, nullable=False)
+    message = db.Column(db.Text)
+
+    statut = db.Column(db.String(20), default="initie")  # initie / verse
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "destinataire_id": self.destinataire_id,
+            "destinataire_nom": self.destinataire.nom if self.destinataire else None,
+            "expediteur_nom": self.expediteur_nom,
+            "expediteur_telephone": self.expediteur_telephone,
+            "expediteur_pays": self.expediteur_pays,
+            "montant": self.montant,
+            "message": self.message,
+            "statut": self.statut,
+            "date_creation": self.date_creation.isoformat(),
+        }
+
+
 class TicketSupport(db.Model):
     """Message envoyé par un utilisateur au support client."""
     __tablename__ = "tickets_support"
