@@ -26,6 +26,9 @@ class Producteur(db.Model):
     photo_url = db.Column(db.String(255))
     histoire = db.Column(db.Text)
 
+    piece_identite_recto = db.Column(db.String(255))
+    piece_identite_verso = db.Column(db.String(255))
+
     verifie = db.Column(db.Boolean, default=False)
 
     code_parrainage = db.Column(db.String(10), unique=True)
@@ -59,6 +62,8 @@ class Producteur(db.Model):
             "description": self.description,
             "photo_url": self.photo_url,
             "histoire": self.histoire,
+            "piece_identite_recto": self.piece_identite_recto,
+            "piece_identite_verso": self.piece_identite_verso,
             "verifie": self.verifie,
             "code_parrainage": self.code_parrainage,
             "nombre_filleuls": self.nombre_filleuls,
@@ -376,6 +381,17 @@ class Livreur(db.Model):
     pays = db.Column(db.String(50), nullable=False, default="Côte d'Ivoire")
     ville = db.Column(db.String(100), nullable=False)
     vehicule = db.Column(db.String(50))
+    marque_vehicule = db.Column(db.String(50))
+    plaque_immatriculation = db.Column(db.String(30))
+    couleur_vehicule = db.Column(db.String(30))
+
+    piece_identite_recto = db.Column(db.String(255))
+    piece_identite_verso = db.Column(db.String(255))
+
+    en_service = db.Column(db.Boolean, default=False)
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+    position_maj = db.Column(db.DateTime)
 
     push_token = db.Column(db.String(255))
 
@@ -392,6 +408,15 @@ class Livreur(db.Model):
             "pays": self.pays,
             "ville": self.ville,
             "vehicule": self.vehicule,
+            "marque_vehicule": self.marque_vehicule,
+            "plaque_immatriculation": self.plaque_immatriculation,
+            "couleur_vehicule": self.couleur_vehicule,
+            "piece_identite_recto": self.piece_identite_recto,
+            "piece_identite_verso": self.piece_identite_verso,
+            "en_service": self.en_service,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "position_maj": self.position_maj.isoformat() if self.position_maj else None,
             "actif": self.actif,
             "date_inscription": self.date_inscription.isoformat(),
             "nombre_livraisons": len([c for c in self.livraisons if c.statut in ("livree", "terminee")]),
@@ -515,6 +540,10 @@ class Commande(db.Model):
     commission_montant = db.Column(db.Float)
     montant_producteur = db.Column(db.Float)
 
+    frais_livraison = db.Column(db.Float, default=0)
+    statut_paiement_livreur = db.Column(db.String(20), default="en_attente")  # en_attente / du / verse
+    retour_confirme = db.Column(db.Boolean, default=False)  # le producteur a confirmé avoir récupéré le colis retourné
+
     statut = db.Column(db.String(30), default="en_attente")
 
     latitude_livraison = db.Column(db.Float)
@@ -553,6 +582,9 @@ class Commande(db.Model):
             "prix_total": self.prix_total,
             "commission_montant": self.commission_montant,
             "montant_producteur": self.montant_producteur,
+            "frais_livraison": self.frais_livraison,
+            "statut_paiement_livreur": self.statut_paiement_livreur,
+            "retour_confirme": self.retour_confirme,
             "statut": self.statut,
             "latitude_livraison": self.latitude_livraison,
             "longitude_livraison": self.longitude_livraison,
