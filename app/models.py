@@ -149,6 +149,72 @@ class HistoriquePrix(db.Model):
         return {"prix": self.prix, "date": self.date.isoformat()}
 
 
+class RecolteFuture(db.Model):
+    """Annonce d'une récolte pas encore disponible, que les acheteurs peuvent réserver à l'avance."""
+    __tablename__ = "recoltes_futures"
+
+    id = db.Column(db.Integer, primary_key=True)
+    producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+
+    nom = db.Column(db.String(150), nullable=False)
+    categorie = db.Column(db.String(50), nullable=False)
+    quantite_estimee = db.Column(db.Float, nullable=False)
+    unite = db.Column(db.String(20), default="sac")
+    prix_unitaire_prevu = db.Column(db.Float, nullable=False)
+    date_recolte_prevue = db.Column(db.Date)
+    description = db.Column(db.Text)
+
+    statut = db.Column(db.String(20), default="ouvert")  # ouvert / clos
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    producteur = db.relationship("Producteur")
+    reservations = db.relationship("ReservationRecolte", backref="recolte", lazy=True)
+
+    def to_dict(self):
+        quantite_reservee = sum(r.quantite for r in self.reservations)
+        return {
+            "id": self.id,
+            "producteur_id": self.producteur_id,
+            "producteur_nom": self.producteur.nom if self.producteur else None,
+            "producteur_ville": self.producteur.ville if self.producteur else None,
+            "producteur_pays": self.producteur.pays if self.producteur else None,
+            "producteur_verifie": self.producteur.verifie if self.producteur else False,
+            "nom": self.nom,
+            "categorie": self.categorie,
+            "quantite_estimee": self.quantite_estimee,
+            "quantite_reservee": quantite_reservee,
+            "unite": self.unite,
+            "prix_unitaire_prevu": self.prix_unitaire_prevu,
+            "date_recolte_prevue": self.date_recolte_prevue.isoformat() if self.date_recolte_prevue else None,
+            "description": self.description,
+            "statut": self.statut,
+            "nombre_reservations": len(self.reservations),
+            "date_creation": self.date_creation.isoformat(),
+        }
+
+
+class ReservationRecolte(db.Model):
+    """Réservation d'une quantité sur une récolte future, par un acheteur."""
+    __tablename__ = "reservations_recolte"
+
+    id = db.Column(db.Integer, primary_key=True)
+    recolte_id = db.Column(db.Integer, db.ForeignKey("recoltes_futures.id"), nullable=False)
+    acheteur_id = db.Column(db.Integer, db.ForeignKey("acheteurs.id"), nullable=False)
+    quantite = db.Column(db.Float, nullable=False)
+    date_reservation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    acheteur = db.relationship("Acheteur")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "acheteur_id": self.acheteur_id,
+            "acheteur_nom": self.acheteur.nom if self.acheteur else None,
+            "quantite": self.quantite,
+            "date_reservation": self.date_reservation.isoformat(),
+        }
+
+
 class AchatGroupe(db.Model):
     """Campagne d'achat groupé : prix réduit débloqué une fois la quantité cible atteinte."""
     __tablename__ = "achats_groupes"
