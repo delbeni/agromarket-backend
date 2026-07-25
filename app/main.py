@@ -531,6 +531,7 @@ def ajouter_produit(producteur_id):
         quantite_disponible=data["quantite_disponible"], photo_url=photo_couverture,
         photos_urls=json.dumps(photos_urls), video_url=data.get("video_url", ""),
         description=data.get("description", ""),
+        disponible_export=bool(data.get("disponible_export", False)),
     )
     db.session.add(produit)
     db.session.commit()
@@ -562,7 +563,7 @@ def modifier_produit(produit_id):
     if "prix_unitaire" in data and data["prix_unitaire"] != produit.prix_unitaire:
         db.session.add(HistoriquePrix(produit_id=produit.id, prix=data["prix_unitaire"]))
 
-    for champ in ["nom", "prix_unitaire", "unite", "quantite_disponible", "photo_url", "video_url", "description", "actif"]:
+    for champ in ["nom", "prix_unitaire", "unite", "quantite_disponible", "photo_url", "video_url", "description", "actif", "disponible_export"]:
         if champ in data:
             setattr(produit, champ, data[champ])
 
@@ -594,6 +595,13 @@ def lister_produits():
             continue
         resultats.append(p.to_dict())
     return jsonify(resultats)
+
+
+@app.route("/api/produits/export", methods=["GET"])
+def lister_produits_export():
+    """Produits signalés par leurs producteurs comme disponibles pour l'export international."""
+    produits = Produit.query.filter_by(actif=True, disponible_export=True).all()
+    return jsonify([p.to_dict() for p in produits])
 
 
 # ---------- ACHATS GROUPÉS ----------
