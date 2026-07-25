@@ -4,7 +4,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from models import (
     db, Producteur, Produit, Acheteur, Commande, Message, Avis, Favori, TicketSupport,
     Livreur, HistoriquePrix, AchatGroupe, ParticipationGroupe, BesoinFinancement,
-    PromesseFinancement, Terrain, CodePremium, NotairePartenaire,
+    PromesseFinancement, Terrain, CodePremium, NotairePartenaire, Beneficiaire, TransfertArgent,
 )
 import os
 import re
@@ -748,6 +748,107 @@ def promettre_financement(besoin_id):
         )
 
     return jsonify({"message": "Promesse enregistrée", "financement": besoin.to_dict()}), 201
+
+
+# ---------- TRANSFERT D'ARGENT LIBRE (diaspora -> Afrique) ----------
+
+@app.route("/api/beneficiaires/inscription", methods=["POST"])
+def inscription_beneficiaire():
+    data = request.get_json()
+    champs_requis = ["nom", "telephone", "mot_de_passe", "pays"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if Beneficiaire.query.filter_by(telephone=data["telephone"]).first():
+        return jsonify({"erreur": "Ce numéro de téléphone est déjà enregistré"}), 409
+
+    beneficiaire = Beneficiaire(
+        nom=data["nom"], telephone=data["telephone"],
+        mot_de_passe_hash=generate_password_hash(data["mot_de_passe"]),
+        pays=data["pays"], ville=data.get("ville", ""),
+        operateur_mobile_money=data.get("operateur_mobile_money", ""),
+        numero_mobile_money=data.get("numero_mobile_money", ""),
+    )
+    db.session.add(beneficiaire)
+    db.session.commit()
+    return jsonify({"message": "Compte bénéficiaire créé", "beneficiaire": beneficiaire.to_dict()}), 201
+
+
+@app.route("/api/beneficiaires/connexion", methods=["POST"])
+def connexion_beneficiaire():
+    data = request.get_json()
+    beneficiaire = Beneficiaire.query.filter_by(telephone=data.get("telephone")).first()
+    if not beneficiaire or not check_password_hash(beneficiaire.mot_de_passe_hash, data.get("mot_de_passe", "")):
+        return jsonify({"erreur": "Téléphone ou mot de passe incorrect"}), 401
+    return jsonify({"message": "Connexion réussie", "beneficiaire": beneficiaire.to_dict()}), 200
+
+
+@app.route("/api/beneficiaires/<int:beneficiaire_id>/push-token", methods=["PUT"])
+def enregistrer_push_token_beneficiaire(beneficiaire_id):
+    beneficiaire = Beneficiaire.query.get_or_404(beneficiaire_id)
+    beneficiaire.push_token = request.get_json().get("push_token", "")
+    db.session.commit()
+    return jsonify({"message": "Jeton enregistré"})
+
+
+@app.route("/api/beneficiaires/rechercher", methods=["GET"])
+def rechercher_beneficiaire():
+    pays = request.args.get("pays")
+    telephone = request.args.get("telephone")
+    if not pays or not telephone:
+        return jsonify({"erreur": "pays et telephone requis"}), 400
+    beneficiaire = Beneficiaire.query.filter_by(pays=pays, telephone=telephone, actif=True).first()
+    if not beneficiaire:
+        return jsonify({"erreur": "Aucun bénéficiaire trouvé avec ce numéro dans ce pays"}), 404
+    return jsonify(beneficiaire.to_dict())
+
+
+@app.route("/api/transferts", methods=["POST"])
+def creer_transfert():
+    data = request.get_json()
+    champs_requis = ["destinataire_id", "expediteur_nom", "montant"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    beneficiaire = Beneficiaire.query.get_or_404(data["destinataire_id"])
+    montant = data["montant"]
+    if not isinstance(montant, (int, float)) or montant <= 0:
+        return jsonify({"erreur": "Montant invalide"}), 400
+
+    transfert = TransfertArgent(
+        destinataire_id=data["destinataire_id"], expediteur_nom=data["expediteur_nom"],
+        expediteur_telephone=data.get("expediteur_telephone", ""), expediteur_pays=data.get("expediteur_pays", ""),
+        montant=montant, message=data.get("message", ""),
+    )
+    db.session.add(transfert)
+    db.session.commit()
+
+    envoyer_notification_push(
+        beneficiaire.push_token, "Transfert d'argent reçu",
+        f"{data['expediteur_nom']} t'envoie {montant} FCFA sur AgriChange.",
+    )
+    envoyer_sms(
+        beneficiaire.telephone, beneficiaire.pays,
+        f"AgriChange : {data['expediteur_nom']} t'a envoyé {montant} FCFA. Le versement se fera dès l'activation du paiement en ligne. Ouvre l'app pour voir le détail.",
+    )
+
+    return jsonify({"message": "Transfert enregistré", "transfert": transfert.to_dict()}), 201
+
+
+@app.route("/api/beneficiaires/<int:beneficiaire_id>/transferts", methods=["GET"])
+def transferts_du_beneficiaire(beneficiaire_id):
+    Beneficiaire.query.get_or_404(beneficiaire_id)
+    transferts = TransfertArgent.query.filter_by(destinataire_id=beneficiaire_id).order_by(TransfertArgent.date_creation.desc()).all()
+    return jsonify([t.to_dict() for t in transferts])
+
+
+@app.route("/api/admin/transferts", methods=["GET"])
+def admin_lister_transferts():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    transferts = TransfertArgent.query.order_by(TransfertArgent.date_creation.desc()).all()
+    return jsonify([t.to_dict() for t in transferts])
 
 
 # ---------- NOTAIRES PARTENAIRES (terrains uniquement) ----------
