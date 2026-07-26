@@ -5,6 +5,7 @@ from models import (
     db, Producteur, Produit, Acheteur, Commande, Message, Avis, Favori, TicketSupport,
     Livreur, HistoriquePrix, AchatGroupe, ParticipationGroupe, BesoinFinancement,
     PromesseFinancement, Terrain, CodePremium, NotairePartenaire, Beneficiaire, TransfertArgent,
+    AgentMarchand, RetraitAgent,
     TrajetPoint, RecolteFuture, ReservationRecolte, Cooperative, MembreCooperative, Invendu, Signalement,
     NumeroMobileMoney,
 )
@@ -1096,10 +1097,24 @@ def creer_transfert():
     if not isinstance(montant, (int, float)) or montant <= 0:
         return jsonify({"erreur": "Montant invalide"}), 400
 
+    # Transfert réalisé via un agent marchand (optionnel)
+    agent = None
+    frais_service = float(data.get("frais_service") or 0)
+    commission_agent = float(data.get("commission_agent") or 0)
+    code_agent = (data.get("code_agent") or "").strip().upper()
+    if code_agent:
+        agent = AgentMarchand.query.filter_by(code_agent=code_agent, actif=True).first()
+        if not agent:
+            return jsonify({"erreur": "Code agent introuvable ou inactif"}), 404
+        if commission_agent > frais_service:
+            return jsonify({"erreur": "La commission agent ne peut pas dépasser les frais de service"}), 400
+
     transfert = TransfertArgent(
         destinataire_id=data["destinataire_id"], expediteur_nom=data["expediteur_nom"],
         expediteur_telephone=data.get("expediteur_telephone", ""), expediteur_pays=data.get("expediteur_pays", ""),
         montant=montant, message=data.get("message", ""),
+        agent_id=agent.id if agent else None,
+        frais_service=frais_service, commission_agent=commission_agent if agent else 0.0,
     )
     db.session.add(transfert)
     db.session.commit()
@@ -1116,6 +1131,44 @@ def creer_transfert():
     return jsonify({"message": "Transfert enregistré", "transfert": transfert.to_dict()}), 201
 
 
+@app.route("/api/transferts/<int:transfert_id>/annuler", methods=["POST"])
+def annuler_transfert(transfert_id):
+    """Permet d'annuler un transfert tant qu'il n'a pas encore été réellement versé.
+    Sert de filet de sécurité en cas d'erreur de numéro de destinataire."""
+    transfert = TransfertArgent.query.get_or_404(transfert_id)
+    if transfert.statut != "initie":
+        return jsonify({"erreur": "Ce transfert ne peut plus être annulé (déjà versé ou déjà annulé)."}), 400
+    data = request.get_json(silent=True) or {}
+    transfert.statut = "annule"
+    transfert.date_annulation = datetime.utcnow()
+    transfert.motif_annulation = data.get("motif", "Annulé par l'expéditeur")
+    db.session.commit()
+    return jsonify({"message": "Transfert annulé", "transfert": transfert.to_dict()})
+
+
+@app.route("/api/admin/transferts/<int:transfert_id>/confirmer-versement", methods=["POST"])
+def confirmer_versement_transfert(transfert_id):
+    """Action admin : confirme que l'argent a réellement été versé (une fois CinetPay actif).
+    C'est à ce moment que la commission de l'agent, s'il y en a un, est créditée sur son solde."""
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    transfert = TransfertArgent.query.get_or_404(transfert_id)
+    if transfert.statut != "initie":
+        return jsonify({"erreur": "Ce transfert n'est plus en attente de versement."}), 400
+
+    transfert.statut = "verse"
+    transfert.date_versement = datetime.utcnow()
+
+    if transfert.agent_id and transfert.commission_agent > 0:
+        agent = AgentMarchand.query.get(transfert.agent_id)
+        if agent:
+            agent.solde_commission = (agent.solde_commission or 0) + transfert.commission_agent
+            agent.total_commission_gagnee = (agent.total_commission_gagnee or 0) + transfert.commission_agent
+
+    db.session.commit()
+    return jsonify({"message": "Versement confirmé", "transfert": transfert.to_dict()})
+
+
 @app.route("/api/beneficiaires/<int:beneficiaire_id>/transferts", methods=["GET"])
 def transferts_du_beneficiaire(beneficiaire_id):
     Beneficiaire.query.get_or_404(beneficiaire_id)
@@ -1129,6 +1182,114 @@ def admin_lister_transferts():
         return jsonify({"erreur": "Accès non autorisé"}), 401
     transferts = TransfertArgent.query.order_by(TransfertArgent.date_creation.desc()).all()
     return jsonify([t.to_dict() for t in transferts])
+
+
+# ---------- AGENTS MARCHANDS (points de transfert d'argent, façon Orange Money) ----------
+
+def generer_code_agent():
+    while True:
+        code = "AG" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(4))
+        if not AgentMarchand.query.filter_by(code_agent=code).first():
+            return code
+
+
+@app.route("/api/agents/inscription", methods=["POST"])
+def inscription_agent():
+    data = request.get_json()
+    champs_requis = ["nom", "telephone", "mot_de_passe", "pays"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if AgentMarchand.query.filter_by(telephone=data["telephone"]).first():
+        return jsonify({"erreur": "Ce numéro de téléphone est déjà enregistré comme agent"}), 409
+
+    agent = AgentMarchand(
+        nom=data["nom"], telephone=data["telephone"],
+        mot_de_passe_hash=generate_password_hash(data["mot_de_passe"]),
+        code_agent=generer_code_agent(),
+        pays=data["pays"], ville=data.get("ville", ""),
+        operateur_mobile_money=data.get("operateur_mobile_money", ""),
+        numero_mobile_money=data.get("numero_mobile_money", ""),
+    )
+    db.session.add(agent)
+    db.session.commit()
+    return jsonify({"message": "Compte agent créé", "agent": agent.to_dict()}), 201
+
+
+@app.route("/api/agents/connexion", methods=["POST"])
+def connexion_agent():
+    data = request.get_json()
+    agent = AgentMarchand.query.filter_by(telephone=data.get("telephone")).first()
+    if not agent or not check_password_hash(agent.mot_de_passe_hash, data.get("mot_de_passe", "")):
+        return jsonify({"erreur": "Téléphone ou mot de passe incorrect"}), 401
+    return jsonify({"message": "Connexion réussie", "agent": agent.to_dict()}), 200
+
+
+@app.route("/api/agents/<int:agent_id>", methods=["GET"])
+def obtenir_agent(agent_id):
+    agent = AgentMarchand.query.get_or_404(agent_id)
+    return jsonify(agent.to_dict())
+
+
+@app.route("/api/agents/<int:agent_id>/transferts", methods=["GET"])
+def transferts_realises_par_agent(agent_id):
+    AgentMarchand.query.get_or_404(agent_id)
+    transferts = TransfertArgent.query.filter_by(agent_id=agent_id).order_by(TransfertArgent.date_creation.desc()).all()
+    return jsonify([t.to_dict() for t in transferts])
+
+
+@app.route("/api/agents/<int:agent_id>/retrait", methods=["POST"])
+def demander_retrait_agent(agent_id):
+    agent = AgentMarchand.query.get_or_404(agent_id)
+    data = request.get_json() or {}
+    montant = data.get("montant", agent.solde_commission)
+    if not isinstance(montant, (int, float)) or montant <= 0:
+        return jsonify({"erreur": "Montant invalide"}), 400
+    if montant > (agent.solde_commission or 0):
+        return jsonify({"erreur": "Le montant demandé dépasse ton solde disponible"}), 400
+
+    retrait = RetraitAgent(agent_id=agent_id, montant=montant)
+    agent.solde_commission = (agent.solde_commission or 0) - montant
+    db.session.add(retrait)
+    db.session.commit()
+    return jsonify({"message": "Demande de retrait enregistrée", "retrait": retrait.to_dict(), "agent": agent.to_dict()}), 201
+
+
+@app.route("/api/agents/<int:agent_id>/retraits", methods=["GET"])
+def historique_retraits_agent(agent_id):
+    AgentMarchand.query.get_or_404(agent_id)
+    retraits = RetraitAgent.query.filter_by(agent_id=agent_id).order_by(RetraitAgent.date_demande.desc()).all()
+    return jsonify([r.to_dict() for r in retraits])
+
+
+@app.route("/api/admin/agents", methods=["GET"])
+def admin_lister_agents():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    agents = AgentMarchand.query.order_by(AgentMarchand.date_inscription.desc()).all()
+    return jsonify([a.to_dict() for a in agents])
+
+
+@app.route("/api/admin/retraits", methods=["GET"])
+def admin_lister_retraits():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    retraits = RetraitAgent.query.order_by(RetraitAgent.date_demande.desc()).all()
+    return jsonify([r.to_dict() for r in retraits])
+
+
+@app.route("/api/admin/retraits/<int:retrait_id>/valider", methods=["POST"])
+def admin_valider_retrait(retrait_id):
+    """Action admin : confirme qu'un retrait d'agent a bien été versé (par virement/mobile money manuel)."""
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    retrait = RetraitAgent.query.get_or_404(retrait_id)
+    if retrait.statut != "demande":
+        return jsonify({"erreur": "Ce retrait a déjà été traité."}), 400
+    retrait.statut = "verse"
+    retrait.date_versement = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"message": "Retrait validé", "retrait": retrait.to_dict()})
 
 
 # ---------- NOTAIRES PARTENAIRES (terrains uniquement) ----------
