@@ -5,7 +5,7 @@ from models import (
     db, Producteur, Produit, Acheteur, Commande, Message, Avis, Favori, TicketSupport,
     Livreur, HistoriquePrix, AchatGroupe, ParticipationGroupe, BesoinFinancement,
     PromesseFinancement, Terrain, CodePremium, NotairePartenaire, Beneficiaire, TransfertArgent,
-    AgentMarchand, RetraitAgent,
+    AgentMarchand, RetraitAgent, RechargeAgent,
     TrajetPoint, RecolteFuture, ReservationRecolte, Cooperative, MembreCooperative, Invendu, Signalement,
     NumeroMobileMoney,
 )
@@ -1290,6 +1290,149 @@ def admin_valider_retrait(retrait_id):
     retrait.date_versement = datetime.utcnow()
     db.session.commit()
     return jsonify({"message": "Retrait validé", "retrait": retrait.to_dict()})
+
+
+@app.route("/api/agents/<int:agent_id>/piece-identite", methods=["PUT"])
+def enregistrer_piece_identite_agent(agent_id):
+    """L'agent doit fournir sa pièce d'identité avant de pouvoir traiter des transferts pour des clients."""
+    agent = AgentMarchand.query.get_or_404(agent_id)
+    data = request.get_json() or {}
+    if data.get("piece_identite_recto"):
+        agent.piece_identite_recto = data["piece_identite_recto"]
+    if data.get("piece_identite_verso"):
+        agent.piece_identite_verso = data["piece_identite_verso"]
+    db.session.commit()
+    return jsonify({"message": "Pièce d'identité enregistrée, en attente de vérification", "agent": agent.to_dict()})
+
+
+@app.route("/api/admin/agents/<int:agent_id>/verifier-identite", methods=["POST"])
+def admin_verifier_identite_agent(agent_id):
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    agent = AgentMarchand.query.get_or_404(agent_id)
+    agent.identite_verifiee = True
+    db.session.commit()
+    return jsonify({"message": "Identité de l'agent vérifiée", "agent": agent.to_dict()})
+
+
+# ---------- RECHARGE DU SOLDE AGENT (dépôt bancaire / mobile money fait par l'agent lui-même) ----------
+
+@app.route("/api/agents/<int:agent_id>/recharge", methods=["POST"])
+def demander_recharge_agent(agent_id):
+    """L'agent déclare avoir fait un dépôt (banque ou mobile money) vers AgriChange pour créditer
+    son solde de trésorerie. La demande reste en attente jusqu'à validation admin."""
+    agent = AgentMarchand.query.get_or_404(agent_id)
+    if not agent.identite_verifiee:
+        return jsonify({"erreur": "Ton identité doit d'abord être vérifiée avant de pouvoir recharger ton solde."}), 403
+    data = request.get_json() or {}
+    montant = data.get("montant")
+    if not isinstance(montant, (int, float)) or montant <= 0:
+        return jsonify({"erreur": "Montant invalide"}), 400
+    if not data.get("methode"):
+        return jsonify({"erreur": "Précise la méthode de dépôt (banque ou mobile money)"}), 400
+
+    recharge = RechargeAgent(
+        agent_id=agent_id, montant=montant,
+        methode=data["methode"], reference=data.get("reference", ""),
+    )
+    db.session.add(recharge)
+    db.session.commit()
+    return jsonify({"message": "Demande de recharge enregistrée, en attente de validation", "recharge": recharge.to_dict()}), 201
+
+
+@app.route("/api/agents/<int:agent_id>/recharges", methods=["GET"])
+def historique_recharges_agent(agent_id):
+    AgentMarchand.query.get_or_404(agent_id)
+    recharges = RechargeAgent.query.filter_by(agent_id=agent_id).order_by(RechargeAgent.date_demande.desc()).all()
+    return jsonify([r.to_dict() for r in recharges])
+
+
+@app.route("/api/admin/recharges", methods=["GET"])
+def admin_lister_recharges():
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    recharges = RechargeAgent.query.order_by(RechargeAgent.date_demande.desc()).all()
+    return jsonify([r.to_dict() for r in recharges])
+
+
+@app.route("/api/admin/recharges/<int:recharge_id>/valider", methods=["POST"])
+def admin_valider_recharge(recharge_id):
+    """Action admin : après vérification que le dépôt bancaire/mobile money a bien été reçu,
+    crédite le solde de trésorerie de l'agent."""
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    recharge = RechargeAgent.query.get_or_404(recharge_id)
+    if recharge.statut != "demande":
+        return jsonify({"erreur": "Cette recharge a déjà été traitée."}), 400
+    agent = AgentMarchand.query.get(recharge.agent_id)
+    agent.solde_disponible = (agent.solde_disponible or 0) + recharge.montant
+    recharge.statut = "validee"
+    recharge.date_validation = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"message": "Recharge validée et créditée", "recharge": recharge.to_dict(), "agent": agent.to_dict()})
+
+
+@app.route("/api/admin/recharges/<int:recharge_id>/rejeter", methods=["POST"])
+def admin_rejeter_recharge(recharge_id):
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    recharge = RechargeAgent.query.get_or_404(recharge_id)
+    if recharge.statut != "demande":
+        return jsonify({"erreur": "Cette recharge a déjà été traitée."}), 400
+    recharge.statut = "rejetee"
+    db.session.commit()
+    return jsonify({"message": "Recharge rejetée", "recharge": recharge.to_dict()})
+
+
+# ---------- TRANSFERT DIRECT PAR L'AGENT (modèle kiosque : client paie cash à l'agent) ----------
+
+@app.route("/api/agents/<int:agent_id>/transferts-clients", methods=["POST"])
+def creer_transfert_par_agent(agent_id):
+    """L'agent réalise lui-même un transfert pour un client qui lui a remis du cash.
+    Le montant net envoyé au bénéficiaire est débité du solde de trésorerie de l'agent (solde_disponible).
+    Les frais de service que le client a payés en cash restent directement dans la poche de l'agent
+    (pas de mouvement électronique nécessaire pour cette part)."""
+    agent = AgentMarchand.query.get_or_404(agent_id)
+    if not agent.identite_verifiee:
+        return jsonify({"erreur": "Ton identité doit d'abord être vérifiée avant de traiter des transferts."}), 403
+
+    data = request.get_json()
+    champs_requis = ["destinataire_id", "expediteur_nom", "montant"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    beneficiaire = Beneficiaire.query.get_or_404(data["destinataire_id"])
+    montant = data["montant"]
+    if not isinstance(montant, (int, float)) or montant <= 0:
+        return jsonify({"erreur": "Montant invalide"}), 400
+    if montant > (agent.solde_disponible or 0):
+        return jsonify({"erreur": "Solde de trésorerie insuffisant. Recharge ton compte avant de traiter ce transfert."}), 400
+
+    frais_service = float(data.get("frais_service") or 0)
+
+    transfert = TransfertArgent(
+        destinataire_id=data["destinataire_id"], expediteur_nom=data["expediteur_nom"],
+        expediteur_telephone=data.get("expediteur_telephone", ""), expediteur_pays=data.get("expediteur_pays", agent.pays),
+        montant=montant, message=data.get("message", ""),
+        agent_id=agent.id, origine="agent_kiosque",
+        frais_service=frais_service, commission_agent=0.0,  # déjà en cash dans la poche de l'agent
+        statut="verse", date_versement=datetime.utcnow(),  # l'agent a déjà versé le cash lui-même
+    )
+    agent.solde_disponible = (agent.solde_disponible or 0) - montant
+    db.session.add(transfert)
+    db.session.commit()
+
+    envoyer_notification_push(
+        beneficiaire.push_token, "Transfert d'argent reçu",
+        f"{data['expediteur_nom']} t'envoie {montant} FCFA via un agent AgriChange.",
+    )
+    envoyer_sms(
+        beneficiaire.telephone, beneficiaire.pays,
+        f"AgriChange : {data['expediteur_nom']} t'a envoyé {montant} FCFA via un agent partenaire. Ouvre l'app pour voir le détail.",
+    )
+
+    return jsonify({"message": "Transfert traité", "transfert": transfert.to_dict(), "agent": agent.to_dict()}), 201
 
 
 # ---------- NOTAIRES PARTENAIRES (terrains uniquement) ----------
