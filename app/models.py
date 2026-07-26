@@ -671,21 +671,104 @@ class TransfertArgent(db.Model):
     montant = db.Column(db.Float, nullable=False)
     message = db.Column(db.Text)
 
-    statut = db.Column(db.String(20), default="initie")  # initie / verse
+    # Agent marchand ayant réalisé ce transfert pour le compte de l'expéditeur (optionnel)
+    agent_id = db.Column(db.Integer, db.ForeignKey("agents_marchand.id"), nullable=True)
+    frais_service = db.Column(db.Float, default=0.0)      # frais total facturé en plus du montant net
+    commission_agent = db.Column(db.Float, default=0.0)   # part des frais qui revient à l'agent
+
+    statut = db.Column(db.String(20), default="initie")  # initie / verse / annule
     date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+    date_versement = db.Column(db.DateTime)
+    date_annulation = db.Column(db.DateTime)
+    motif_annulation = db.Column(db.String(255))
+
+    agent = db.relationship("AgentMarchand", backref="transferts_realises")
 
     def to_dict(self):
         return {
             "id": self.id,
             "destinataire_id": self.destinataire_id,
             "destinataire_nom": self.destinataire.nom if self.destinataire else None,
+            "destinataire_numero": self.destinataire.numero_mobile_money if self.destinataire else None,
+            "destinataire_operateur": self.destinataire.operateur_mobile_money if self.destinataire else None,
             "expediteur_nom": self.expediteur_nom,
             "expediteur_telephone": self.expediteur_telephone,
             "expediteur_pays": self.expediteur_pays,
             "montant": self.montant,
             "message": self.message,
+            "agent_id": self.agent_id,
+            "agent_nom": self.agent.nom if self.agent else None,
+            "frais_service": self.frais_service,
+            "commission_agent": self.commission_agent,
             "statut": self.statut,
             "date_creation": self.date_creation.isoformat(),
+            "date_versement": self.date_versement.isoformat() if self.date_versement else None,
+            "date_annulation": self.date_annulation.isoformat() if self.date_annulation else None,
+            "motif_annulation": self.motif_annulation,
+        }
+
+
+class AgentMarchand(db.Model):
+    """Agent indépendant (comme un point Orange Money) qui réalise des transferts d'argent
+    pour le compte de clients via AgriChange, en échange d'une commission versée sur son solde."""
+    __tablename__ = "agents_marchand"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(120), nullable=False)
+    telephone = db.Column(db.String(20), unique=True, nullable=False)
+    mot_de_passe_hash = db.Column(db.String(255), nullable=False)
+    code_agent = db.Column(db.String(12), unique=True, nullable=False)  # code que le client communique à l'agent
+
+    pays = db.Column(db.String(50), nullable=False)
+    ville = db.Column(db.String(100))
+
+    operateur_mobile_money = db.Column(db.String(30))  # pour recevoir ses gains
+    numero_mobile_money = db.Column(db.String(30))
+
+    solde_commission = db.Column(db.Float, default=0.0)  # gains en attente de retrait
+    total_commission_gagnee = db.Column(db.Float, default=0.0)  # cumul historique (indicatif)
+
+    actif = db.Column(db.Boolean, default=True)
+    date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
+
+    retraits = db.relationship("RetraitAgent", backref="agent", lazy=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "nom": self.nom,
+            "telephone": self.telephone,
+            "code_agent": self.code_agent,
+            "pays": self.pays,
+            "ville": self.ville,
+            "operateur_mobile_money": self.operateur_mobile_money,
+            "numero_mobile_money": self.numero_mobile_money,
+            "solde_commission": self.solde_commission,
+            "total_commission_gagnee": self.total_commission_gagnee,
+            "nombre_transferts": len(self.transferts_realises),
+            "date_inscription": self.date_inscription.isoformat(),
+        }
+
+
+class RetraitAgent(db.Model):
+    """Demande de retrait du solde de commission accumulé par un agent marchand."""
+    __tablename__ = "retraits_agent"
+
+    id = db.Column(db.Integer, primary_key=True)
+    agent_id = db.Column(db.Integer, db.ForeignKey("agents_marchand.id"), nullable=False)
+    montant = db.Column(db.Float, nullable=False)
+    statut = db.Column(db.String(20), default="demande")  # demande / verse
+    date_demande = db.Column(db.DateTime, default=datetime.utcnow)
+    date_versement = db.Column(db.DateTime)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "agent_id": self.agent_id,
+            "montant": self.montant,
+            "statut": self.statut,
+            "date_demande": self.date_demande.isoformat(),
+            "date_versement": self.date_versement.isoformat() if self.date_versement else None,
         }
 
 
