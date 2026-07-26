@@ -673,6 +673,7 @@ class TransfertArgent(db.Model):
 
     # Agent marchand ayant réalisé ce transfert pour le compte de l'expéditeur (optionnel)
     agent_id = db.Column(db.Integer, db.ForeignKey("agents_marchand.id"), nullable=True)
+    origine = db.Column(db.String(20), default="client_en_ligne")  # client_en_ligne / agent_kiosque
     frais_service = db.Column(db.Float, default=0.0)      # frais total facturé en plus du montant net
     commission_agent = db.Column(db.Float, default=0.0)   # part des frais qui revient à l'agent
 
@@ -698,6 +699,7 @@ class TransfertArgent(db.Model):
             "message": self.message,
             "agent_id": self.agent_id,
             "agent_nom": self.agent.nom if self.agent else None,
+            "origine": self.origine,
             "frais_service": self.frais_service,
             "commission_agent": self.commission_agent,
             "statut": self.statut,
@@ -725,6 +727,16 @@ class AgentMarchand(db.Model):
     operateur_mobile_money = db.Column(db.String(30))  # pour recevoir ses gains
     numero_mobile_money = db.Column(db.String(30))
 
+    # Vérification d'identité obligatoire (il manipule l'argent de tiers, comme producteurs/livreurs)
+    piece_identite_recto = db.Column(db.String(255))
+    piece_identite_verso = db.Column(db.String(255))
+    identite_verifiee = db.Column(db.Boolean, default=False)
+
+    # Solde de trésorerie de l'agent : c'est CE solde qui est débité quand l'agent envoie
+    # de l'argent pour le compte d'un client (modèle kiosque, client paie cash à l'agent).
+    # L'agent le recharge lui-même par dépôt bancaire / mobile money, validé par l'admin.
+    solde_disponible = db.Column(db.Float, default=0.0)
+
     solde_commission = db.Column(db.Float, default=0.0)  # gains en attente de retrait
     total_commission_gagnee = db.Column(db.Float, default=0.0)  # cumul historique (indicatif)
 
@@ -732,6 +744,7 @@ class AgentMarchand(db.Model):
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
 
     retraits = db.relationship("RetraitAgent", backref="agent", lazy=True)
+    recharges = db.relationship("RechargeAgent", backref="agent", lazy=True)
 
     def to_dict(self):
         return {
@@ -743,10 +756,39 @@ class AgentMarchand(db.Model):
             "ville": self.ville,
             "operateur_mobile_money": self.operateur_mobile_money,
             "numero_mobile_money": self.numero_mobile_money,
+            "identite_verifiee": self.identite_verifiee,
+            "solde_disponible": self.solde_disponible,
             "solde_commission": self.solde_commission,
             "total_commission_gagnee": self.total_commission_gagnee,
             "nombre_transferts": len(self.transferts_realises),
             "date_inscription": self.date_inscription.isoformat(),
+        }
+
+
+class RechargeAgent(db.Model):
+    """Demande de recharge du solde de trésorerie d'un agent (dépôt bancaire ou mobile money
+    que l'agent effectue lui-même vers AgriChange, validé ensuite par l'admin)."""
+    __tablename__ = "recharges_agent"
+
+    id = db.Column(db.Integer, primary_key=True)
+    agent_id = db.Column(db.Integer, db.ForeignKey("agents_marchand.id"), nullable=False)
+    montant = db.Column(db.Float, nullable=False)
+    methode = db.Column(db.String(30))  # depot_bancaire / mobile_money / autre
+    reference = db.Column(db.String(120))  # référence du dépôt/virement pour vérification
+    statut = db.Column(db.String(20), default="demande")  # demande / validee / rejetee
+    date_demande = db.Column(db.DateTime, default=datetime.utcnow)
+    date_validation = db.Column(db.DateTime)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "agent_id": self.agent_id,
+            "montant": self.montant,
+            "methode": self.methode,
+            "reference": self.reference,
+            "statut": self.statut,
+            "date_demande": self.date_demande.isoformat(),
+            "date_validation": self.date_validation.isoformat() if self.date_validation else None,
         }
 
 
