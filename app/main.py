@@ -6,6 +6,7 @@ from models import (
     Livreur, HistoriquePrix, AchatGroupe, ParticipationGroupe, BesoinFinancement,
     PromesseFinancement, Terrain, CodePremium, NotairePartenaire, Beneficiaire, TransfertArgent,
     AgentMarchand, RetraitAgent, RechargeAgent,
+    Hotel, ChambreHotel, ReservationHotel, Restaurant, PlatMenu, CommandeNourriture,
     TrajetPoint, RecolteFuture, ReservationRecolte, Cooperative, MembreCooperative, Invendu, Signalement,
     NumeroMobileMoney,
 )
@@ -1939,6 +1940,260 @@ def admin_lister_commandes():
         return jsonify({"erreur": "Accès non autorisé"}), 401
     commandes = Commande.query.order_by(Commande.date_commande.desc()).all()
     return jsonify([c.to_dict() for c in commandes])
+
+
+@app.route("/api/hotels/inscription", methods=["POST"])
+def inscrire_hotel():
+    data = request.get_json()
+    champs_requis = ["nom", "pays", "ville", "telephone", "mot_de_passe"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if Hotel.query.filter_by(telephone=data["telephone"]).first():
+        return jsonify({"erreur": "Un hôtel est déjà inscrit avec ce numéro."}), 409
+
+    hotel = Hotel(
+        nom=data["nom"], description=data.get("description", ""),
+        pays=data["pays"], ville=data["ville"], adresse=data.get("adresse", ""),
+        telephone=data["telephone"], email=data.get("email", ""), photo=data.get("photo", ""),
+        mot_de_passe_hash=generate_password_hash(data["mot_de_passe"]),
+    )
+    db.session.add(hotel)
+    db.session.commit()
+    return jsonify({"message": "Hôtel inscrit", "hotel": hotel.to_dict()}), 201
+
+
+@app.route("/api/hotels/connexion", methods=["POST"])
+def connexion_hotel():
+    data = request.get_json()
+    hotel = Hotel.query.filter_by(telephone=data.get("telephone")).first()
+    if not hotel or not check_password_hash(hotel.mot_de_passe_hash, data.get("mot_de_passe", "")):
+        return jsonify({"erreur": "Téléphone ou mot de passe incorrect"}), 401
+    return jsonify({"message": "Connexion réussie", "hotel": hotel.to_dict()})
+
+
+@app.route("/api/hotels", methods=["GET"])
+def lister_hotels():
+    """Recherche d'hôtels, par pays et/ou ville (le client peut être n'importe où dans le monde)."""
+    query = Hotel.query.filter_by(actif=True)
+    if request.args.get("pays"):
+        query = query.filter_by(pays=request.args["pays"])
+    if request.args.get("ville"):
+        query = query.filter(Hotel.ville.ilike(f"%{request.args['ville']}%"))
+    hotels = query.order_by(Hotel.nom).all()
+    return jsonify([h.to_dict() for h in hotels])
+
+
+@app.route("/api/hotels/<int:hotel_id>", methods=["GET"])
+def detail_hotel(hotel_id):
+    hotel = Hotel.query.get_or_404(hotel_id)
+    data = hotel.to_dict()
+    data["chambres"] = [c.to_dict() for c in ChambreHotel.query.filter_by(hotel_id=hotel_id, disponible=True).all()]
+    return jsonify(data)
+
+
+@app.route("/api/hotels/<int:hotel_id>/chambres", methods=["POST"])
+def ajouter_chambre(hotel_id):
+    Hotel.query.get_or_404(hotel_id)
+    data = request.get_json()
+    champs_requis = ["nom", "prix_nuit"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    chambre = ChambreHotel(
+        hotel_id=hotel_id, nom=data["nom"], description=data.get("description", ""),
+        prix_nuit=data["prix_nuit"], capacite=data.get("capacite", 2), photo=data.get("photo", ""),
+    )
+    db.session.add(chambre)
+    db.session.commit()
+    return jsonify({"message": "Chambre ajoutée", "chambre": chambre.to_dict()}), 201
+
+
+@app.route("/api/chambres/<int:chambre_id>", methods=["PUT"])
+def modifier_chambre(chambre_id):
+    chambre = ChambreHotel.query.get_or_404(chambre_id)
+    data = request.get_json() or {}
+    for champ in ["nom", "description", "prix_nuit", "capacite", "photo", "disponible"]:
+        if champ in data:
+            setattr(chambre, champ, data[champ])
+    db.session.commit()
+    return jsonify({"message": "Chambre mise à jour", "chambre": chambre.to_dict()})
+
+
+@app.route("/api/reservations-hotel", methods=["POST"])
+def creer_reservation_hotel():
+    data = request.get_json()
+    champs_requis = ["hotel_id", "chambre_id", "client_nom", "client_telephone", "date_arrivee", "date_depart"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    chambre = ChambreHotel.query.get_or_404(data["chambre_id"])
+    try:
+        date_arrivee = datetime.strptime(data["date_arrivee"], "%Y-%m-%d").date()
+        date_depart = datetime.strptime(data["date_depart"], "%Y-%m-%d").date()
+    except ValueError:
+        return jsonify({"erreur": "Format de date invalide (attendu AAAA-MM-JJ)"}), 400
+
+    nombre_nuits = (date_depart - date_arrivee).days
+    if nombre_nuits <= 0:
+        return jsonify({"erreur": "La date de départ doit être après la date d'arrivée."}), 400
+
+    reservation = ReservationHotel(
+        hotel_id=data["hotel_id"], chambre_id=data["chambre_id"],
+        client_nom=data["client_nom"], client_telephone=data["client_telephone"],
+        client_pays=data.get("client_pays", ""),
+        date_arrivee=date_arrivee, date_depart=date_depart, nombre_nuits=nombre_nuits,
+        nombre_personnes=data.get("nombre_personnes", 1),
+        montant_total=chambre.prix_nuit * nombre_nuits,
+        message=data.get("message", ""),
+    )
+    db.session.add(reservation)
+    db.session.commit()
+    return jsonify({"message": "Réservation créée, en attente de confirmation de l'hôtel", "reservation": reservation.to_dict()}), 201
+
+
+@app.route("/api/hotels/<int:hotel_id>/reservations", methods=["GET"])
+def lister_reservations_hotel(hotel_id):
+    Hotel.query.get_or_404(hotel_id)
+    reservations = ReservationHotel.query.filter_by(hotel_id=hotel_id).order_by(ReservationHotel.date_creation.desc()).all()
+    return jsonify([r.to_dict() for r in reservations])
+
+
+@app.route("/api/reservations-hotel/<int:reservation_id>/statut", methods=["PUT"])
+def changer_statut_reservation(reservation_id):
+    reservation = ReservationHotel.query.get_or_404(reservation_id)
+    data = request.get_json() or {}
+    nouveau_statut = data.get("statut")
+    if nouveau_statut not in ["initiee", "payee", "confirmee", "annulee"]:
+        return jsonify({"erreur": "Statut invalide"}), 400
+    reservation.statut = nouveau_statut
+    db.session.commit()
+    return jsonify({"message": "Statut mis à jour", "reservation": reservation.to_dict()})
+
+
+@app.route("/api/restaurants/inscription", methods=["POST"])
+def inscrire_restaurant():
+    data = request.get_json()
+    champs_requis = ["nom", "pays", "ville", "telephone", "mot_de_passe"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if Restaurant.query.filter_by(telephone=data["telephone"]).first():
+        return jsonify({"erreur": "Un établissement est déjà inscrit avec ce numéro."}), 409
+
+    restaurant = Restaurant(
+        nom=data["nom"], type_etablissement=data.get("type_etablissement", "restaurant"),
+        description=data.get("description", ""), pays=data["pays"], ville=data["ville"],
+        quartier=data.get("quartier", ""), telephone=data["telephone"], photo=data.get("photo", ""),
+        mot_de_passe_hash=generate_password_hash(data["mot_de_passe"]),
+    )
+    db.session.add(restaurant)
+    db.session.commit()
+    return jsonify({"message": "Établissement inscrit", "restaurant": restaurant.to_dict()}), 201
+
+
+@app.route("/api/restaurants/connexion", methods=["POST"])
+def connexion_restaurant():
+    data = request.get_json()
+    restaurant = Restaurant.query.filter_by(telephone=data.get("telephone")).first()
+    if not restaurant or not check_password_hash(restaurant.mot_de_passe_hash, data.get("mot_de_passe", "")):
+        return jsonify({"erreur": "Téléphone ou mot de passe incorrect"}), 401
+    return jsonify({"message": "Connexion réussie", "restaurant": restaurant.to_dict()})
+
+
+@app.route("/api/restaurants", methods=["GET"])
+def lister_restaurants():
+    query = Restaurant.query.filter_by(actif=True)
+    if request.args.get("pays"):
+        query = query.filter_by(pays=request.args["pays"])
+    if request.args.get("ville"):
+        query = query.filter(Restaurant.ville.ilike(f"%{request.args['ville']}%"))
+    restaurants = query.order_by(Restaurant.nom).all()
+    return jsonify([r.to_dict() for r in restaurants])
+
+
+@app.route("/api/restaurants/<int:restaurant_id>", methods=["GET"])
+def detail_restaurant(restaurant_id):
+    restaurant = Restaurant.query.get_or_404(restaurant_id)
+    data = restaurant.to_dict()
+    data["plats"] = [p.to_dict() for p in PlatMenu.query.filter_by(restaurant_id=restaurant_id, disponible=True).all()]
+    return jsonify(data)
+
+
+@app.route("/api/restaurants/<int:restaurant_id>/plats", methods=["POST"])
+def ajouter_plat(restaurant_id):
+    Restaurant.query.get_or_404(restaurant_id)
+    data = request.get_json()
+    champs_requis = ["nom", "prix"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    plat = PlatMenu(
+        restaurant_id=restaurant_id, nom=data["nom"], description=data.get("description", ""),
+        prix=data["prix"], photo=data.get("photo", ""),
+    )
+    db.session.add(plat)
+    db.session.commit()
+    return jsonify({"message": "Plat ajouté", "plat": plat.to_dict()}), 201
+
+
+@app.route("/api/plats/<int:plat_id>", methods=["PUT"])
+def modifier_plat(plat_id):
+    plat = PlatMenu.query.get_or_404(plat_id)
+    data = request.get_json() or {}
+    for champ in ["nom", "description", "prix", "photo", "disponible"]:
+        if champ in data:
+            setattr(plat, champ, data[champ])
+    db.session.commit()
+    return jsonify({"message": "Plat mis à jour", "plat": plat.to_dict()})
+
+
+@app.route("/api/commandes-nourriture", methods=["POST"])
+def creer_commande_nourriture():
+    data = request.get_json()
+    champs_requis = ["restaurant_id", "client_nom", "client_telephone", "adresse_livraison", "items"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if not isinstance(data["items"], list) or len(data["items"]) == 0:
+        return jsonify({"erreur": "La commande doit contenir au moins un plat."}), 400
+
+    montant_total = sum(item.get("prix", 0) * item.get("quantite", 1) for item in data["items"])
+
+    commande = CommandeNourriture(
+        restaurant_id=data["restaurant_id"],
+        client_nom=data["client_nom"], client_telephone=data["client_telephone"],
+        adresse_livraison=data["adresse_livraison"],
+        items=json.dumps(data["items"]), montant_total=montant_total,
+        message=data.get("message", ""),
+    )
+    db.session.add(commande)
+    db.session.commit()
+    return jsonify({"message": "Commande envoyée au restaurant", "commande": commande.to_dict()}), 201
+
+
+@app.route("/api/restaurants/<int:restaurant_id>/commandes", methods=["GET"])
+def lister_commandes_restaurant(restaurant_id):
+    Restaurant.query.get_or_404(restaurant_id)
+    commandes = CommandeNourriture.query.filter_by(restaurant_id=restaurant_id).order_by(CommandeNourriture.date_creation.desc()).all()
+    return jsonify([c.to_dict() for c in commandes])
+
+
+@app.route("/api/commandes-nourriture/<int:commande_id>/statut", methods=["PUT"])
+def changer_statut_commande_nourriture(commande_id):
+    commande = CommandeNourriture.query.get_or_404(commande_id)
+    data = request.get_json() or {}
+    nouveau_statut = data.get("statut")
+    if nouveau_statut not in ["initiee", "en_preparation", "en_livraison", "livree", "annulee"]:
+        return jsonify({"erreur": "Statut invalide"}), 400
+    commande.statut = nouveau_statut
+    if data.get("livreur_id"):
+        commande.livreur_id = data["livreur_id"]
+    db.session.commit()
+    return jsonify({"message": "Statut mis à jour", "commande": commande.to_dict()})
 
 
 if __name__ == "__main__":
