@@ -1,5 +1,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+import json
 
 db = SQLAlchemy()
 
@@ -811,6 +812,177 @@ class RetraitAgent(db.Model):
             "statut": self.statut,
             "date_demande": self.date_demande.isoformat(),
             "date_versement": self.date_versement.isoformat() if self.date_versement else None,
+        }
+
+
+class Hotel(db.Model):
+    """Établissement hôtelier partenaire, consultable et réservable depuis AgriChange
+    (utile notamment pour la diaspora qui veut réserver un hôtel en Afrique, ou l'inverse)."""
+    __tablename__ = "hotels"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text)
+    pays = db.Column(db.String(50), nullable=False)
+    ville = db.Column(db.String(100), nullable=False)
+    adresse = db.Column(db.String(255))
+    telephone = db.Column(db.String(30), nullable=False)
+    email = db.Column(db.String(120))
+    photo = db.Column(db.String(255))
+    mot_de_passe_hash = db.Column(db.String(255), nullable=False)
+    actif = db.Column(db.Boolean, default=True)
+    date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
+
+    chambres = db.relationship("ChambreHotel", backref="hotel", lazy=True, cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            "id": self.id, "nom": self.nom, "description": self.description,
+            "pays": self.pays, "ville": self.ville, "adresse": self.adresse,
+            "telephone": self.telephone, "email": self.email, "photo": self.photo,
+            "nombre_chambres": len(self.chambres),
+            "date_inscription": self.date_inscription.isoformat(),
+        }
+
+
+class ChambreHotel(db.Model):
+    """Type de chambre proposé par un hôtel (ex: Standard, Suite...)."""
+    __tablename__ = "chambres_hotel"
+
+    id = db.Column(db.Integer, primary_key=True)
+    hotel_id = db.Column(db.Integer, db.ForeignKey("hotels.id"), nullable=False)
+    nom = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text)
+    prix_nuit = db.Column(db.Float, nullable=False)
+    capacite = db.Column(db.Integer, default=2)
+    photo = db.Column(db.String(255))
+    disponible = db.Column(db.Boolean, default=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "hotel_id": self.hotel_id, "nom": self.nom,
+            "description": self.description, "prix_nuit": self.prix_nuit,
+            "capacite": self.capacite, "photo": self.photo, "disponible": self.disponible,
+        }
+
+
+class ReservationHotel(db.Model):
+    """Réservation d'une chambre par un client (client local ou diaspora réservant à distance)."""
+    __tablename__ = "reservations_hotel"
+
+    id = db.Column(db.Integer, primary_key=True)
+    hotel_id = db.Column(db.Integer, db.ForeignKey("hotels.id"), nullable=False)
+    chambre_id = db.Column(db.Integer, db.ForeignKey("chambres_hotel.id"), nullable=False)
+
+    client_nom = db.Column(db.String(120), nullable=False)
+    client_telephone = db.Column(db.String(30), nullable=False)
+    client_pays = db.Column(db.String(50))  # pays depuis lequel le client réserve (ex: France pour la diaspora)
+
+    date_arrivee = db.Column(db.Date, nullable=False)
+    date_depart = db.Column(db.Date, nullable=False)
+    nombre_nuits = db.Column(db.Integer, nullable=False)
+    nombre_personnes = db.Column(db.Integer, default=1)
+    montant_total = db.Column(db.Float, nullable=False)
+    message = db.Column(db.Text)
+
+    statut = db.Column(db.String(20), default="initiee")  # initiee / payee / confirmee / annulee
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    hotel = db.relationship("Hotel", backref="reservations")
+    chambre = db.relationship("ChambreHotel", backref="reservations")
+
+    def to_dict(self):
+        return {
+            "id": self.id, "hotel_id": self.hotel_id, "hotel_nom": self.hotel.nom if self.hotel else None,
+            "chambre_id": self.chambre_id, "chambre_nom": self.chambre.nom if self.chambre else None,
+            "client_nom": self.client_nom, "client_telephone": self.client_telephone, "client_pays": self.client_pays,
+            "date_arrivee": self.date_arrivee.isoformat(), "date_depart": self.date_depart.isoformat(),
+            "nombre_nuits": self.nombre_nuits, "nombre_personnes": self.nombre_personnes,
+            "montant_total": self.montant_total, "message": self.message,
+            "statut": self.statut, "date_creation": self.date_creation.isoformat(),
+        }
+
+
+class Restaurant(db.Model):
+    """Restaurant, mini-restaurant ou cuisinière/vendeuse de nourriture inscrite sur AgriChange,
+    pour permettre aux clients (ex: employés de bureau) de commander un repas livré."""
+    __tablename__ = "restaurants"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(150), nullable=False)
+    type_etablissement = db.Column(db.String(30), default="restaurant")  # restaurant / cuisiniere / mini_restaurant
+    description = db.Column(db.Text)
+    pays = db.Column(db.String(50), nullable=False)
+    ville = db.Column(db.String(100), nullable=False)
+    quartier = db.Column(db.String(100))
+    telephone = db.Column(db.String(30), nullable=False)
+    photo = db.Column(db.String(255))
+    mot_de_passe_hash = db.Column(db.String(255), nullable=False)
+    actif = db.Column(db.Boolean, default=True)
+    date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
+
+    plats = db.relationship("PlatMenu", backref="restaurant", lazy=True, cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            "id": self.id, "nom": self.nom, "type_etablissement": self.type_etablissement,
+            "description": self.description, "pays": self.pays, "ville": self.ville, "quartier": self.quartier,
+            "telephone": self.telephone, "photo": self.photo,
+            "nombre_plats": len(self.plats),
+            "date_inscription": self.date_inscription.isoformat(),
+        }
+
+
+class PlatMenu(db.Model):
+    """Plat proposé au menu d'un restaurant/cuisinière."""
+    __tablename__ = "plats_menu"
+
+    id = db.Column(db.Integer, primary_key=True)
+    restaurant_id = db.Column(db.Integer, db.ForeignKey("restaurants.id"), nullable=False)
+    nom = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text)
+    prix = db.Column(db.Float, nullable=False)
+    photo = db.Column(db.String(255))
+    disponible = db.Column(db.Boolean, default=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "restaurant_id": self.restaurant_id, "nom": self.nom,
+            "description": self.description, "prix": self.prix, "photo": self.photo, "disponible": self.disponible,
+        }
+
+
+class CommandeNourriture(db.Model):
+    """Commande de repas passée à un restaurant/cuisinière, à livrer (ex: sur le lieu de travail du client)."""
+    __tablename__ = "commandes_nourriture"
+
+    id = db.Column(db.Integer, primary_key=True)
+    restaurant_id = db.Column(db.Integer, db.ForeignKey("restaurants.id"), nullable=False)
+    livreur_id = db.Column(db.Integer, db.ForeignKey("livreurs.id"))
+
+    client_nom = db.Column(db.String(120), nullable=False)
+    client_telephone = db.Column(db.String(30), nullable=False)
+    adresse_livraison = db.Column(db.String(255), nullable=False)
+
+    items = db.Column(db.Text, nullable=False)  # JSON: [{"plat_id":.., "nom":.., "prix":.., "quantite":..}]
+    montant_total = db.Column(db.Float, nullable=False)
+    message = db.Column(db.Text)
+
+    statut = db.Column(db.String(20), default="initiee")  # initiee / en_preparation / en_livraison / livree / annulee
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    restaurant = db.relationship("Restaurant", backref="commandes")
+    livreur = db.relationship("Livreur", backref="commandes_nourriture")
+
+    def to_dict(self):
+        return {
+            "id": self.id, "restaurant_id": self.restaurant_id, "restaurant_nom": self.restaurant.nom if self.restaurant else None,
+            "livreur_id": self.livreur_id, "livreur_nom": self.livreur.nom if self.livreur else None,
+            "client_nom": self.client_nom, "client_telephone": self.client_telephone,
+            "adresse_livraison": self.adresse_livraison,
+            "items": json.loads(self.items) if self.items else [],
+            "montant_total": self.montant_total, "message": self.message,
+            "statut": self.statut, "date_creation": self.date_creation.isoformat(),
         }
 
 
