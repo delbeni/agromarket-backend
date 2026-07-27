@@ -19,6 +19,16 @@ import urllib.parse
 import math
 from datetime import datetime
 
+# ---------- Configuration PayDunya ----------
+# Ces clés sont à définir en variables d'environnement sur Render (Dashboard > Environment).
+# En attendant d'avoir les vraies clés de production, utilise les clés TEST fournies par PayDunya.
+PAYDUNYA_MASTER_KEY = os.environ.get("PAYDUNYA_MASTER_KEY", "")
+PAYDUNYA_PRIVATE_KEY = os.environ.get("PAYDUNYA_PRIVATE_KEY", "")
+PAYDUNYA_PUBLIC_KEY = os.environ.get("PAYDUNYA_PUBLIC_KEY", "")
+PAYDUNYA_TOKEN = os.environ.get("PAYDUNYA_TOKEN", "")
+PAYDUNYA_MODE = os.environ.get("PAYDUNYA_MODE", "test")  # "test" ou "live"
+PAYDUNYA_API_BASE = "https://app.paydunya.com/api/v1"
+
 app = Flask(__name__)
 CORS(app)
 
@@ -1942,7 +1952,126 @@ def admin_lister_commandes():
     return jsonify([c.to_dict() for c in commandes])
 
 
-@app.route("/api/hotels/inscription", methods=["POST"])
+def paydunya_headers():
+    return {
+        "PAYDUNYA-MASTER-KEY": PAYDUNYA_MASTER_KEY,
+        "PAYDUNYA-PRIVATE-KEY": PAYDUNYA_PRIVATE_KEY,
+        "PAYDUNYA-PUBLIC-KEY": PAYDUNYA_PUBLIC_KEY,
+        "PAYDUNYA-TOKEN": PAYDUNYA_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+
+def paydunya_appel_api(chemin, donnees):
+    """Envoie une requête POST à l'API PayDunya et retourne la réponse JSON."""
+    url = f"{PAYDUNYA_API_BASE}/{chemin}"
+    body = json.dumps(donnees).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers=paydunya_headers(), method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            return json.loads(res.read().decode("utf-8")), res.status
+    except urllib.error.HTTPError as e:
+        return json.loads(e.read().decode("utf-8")), e.code
+    except Exception as e:
+        return {"response_text": str(e)}, 500
+
+
+def paydunya_verifier_facture(token):
+    """Vérifie le statut réel d'une facture auprès de PayDunya (ne jamais faire confiance à l'IPN seul)."""
+    url = f"{PAYDUNYA_API_BASE}/checkout-invoice/confirm/{token}"
+    req = urllib.request.Request(url, headers=paydunya_headers(), method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            return json.loads(res.read().decode("utf-8"))
+    except Exception as e:
+        return {"status": "erreur", "erreur": str(e)}
+
+
+# ---------- Types de commande pris en charge par le paiement PayDunya ----------
+PAYDUNYA_MODELES = {
+    "commande": Commande,
+    "commande_nourriture": CommandeNourriture,
+    "reservation_hotel": ReservationHotel,
+}
+
+
+@app.route("/api/paiement/paydunya/initier", methods=["POST"])
+def paydunya_initier_paiement():
+    """Crée une facture PayDunya pour une commande/réservation existante et renvoie l'URL de paiement."""
+    data = request.get_json()
+    type_commande = data.get("type_commande")
+    commande_id = data.get("commande_id")
+    if type_commande not in PAYDUNYA_MODELES:
+        return jsonify({"erreur": "type_commande invalide"}), 400
+
+    modele = PAYDUNYA_MODELES[type_commande]
+    objet = modele.query.get_or_404(commande_id)
+
+    montant = getattr(objet, "prix_total", None) or getattr(objet, "montant_total", None)
+    if not montant:
+        return jsonify({"erreur": "Impossible de déterminer le montant à payer."}), 400
+
+    payload = {
+        "invoice": {
+            "total_amount": int(montant),
+            "description": f"AgriChange — {type_commande} #{commande_id}",
+        },
+        "store": {"name": "AgriChange"},
+        "actions": {
+            "cancel_url": data.get("cancel_url", ""),
+            "return_url": data.get("return_url", ""),
+            "callback_url": f"{request.url_root.rstrip('/')}/api/paiement/paydunya/ipn",
+        },
+        "custom_data": {"type_commande": type_commande, "commande_id": commande_id},
+    }
+
+    reponse, statut = paydunya_appel_api("checkout-invoice/create", payload)
+    if reponse.get("response_code") == "00":
+        return jsonify({
+            "message": "Facture créée",
+            "url_paiement": reponse.get("response_text"),
+            "token": reponse.get("token"),
+        }), 201
+    return jsonify({"erreur": "Échec de la création de la facture PayDunya", "detail": reponse}), 400
+
+
+@app.route("/api/paiement/paydunya/ipn", methods=["POST"])
+def paydunya_ipn():
+    """Reçoit la notification de paiement de PayDunya (IPN) et met à jour la commande correspondante.
+    Ne fait jamais confiance aux données reçues directement : revérifie toujours le token auprès de PayDunya."""
+    donnees_recues = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
+    token = donnees_recues.get("data[token]") or donnees_recues.get("token")
+    if not token:
+        return jsonify({"erreur": "Token manquant"}), 400
+
+    verification = paydunya_verifier_facture(token)
+    if verification.get("status") != "completed":
+        return jsonify({"message": "Paiement non confirmé, aucune action effectuée."}), 200
+
+    custom_data = verification.get("custom_data", {})
+    type_commande = custom_data.get("type_commande")
+    commande_id = custom_data.get("commande_id")
+    modele = PAYDUNYA_MODELES.get(type_commande)
+    if not modele or not commande_id:
+        return jsonify({"erreur": "custom_data invalide, commande non identifiée"}), 400
+
+    objet = modele.query.get(commande_id)
+    if not objet:
+        return jsonify({"erreur": "Commande introuvable"}), 404
+
+    if hasattr(objet, "statut"):
+        if type_commande == "commande":
+            objet.statut = "confirmee_producteur"
+        elif type_commande == "commande_nourriture":
+            objet.statut = "en_preparation"
+        elif type_commande == "reservation_hotel":
+            objet.statut = "payee"
+    db.session.commit()
+
+    return jsonify({"message": "Paiement confirmé et commande mise à jour"}), 200
+
+
+
 def inscrire_hotel():
     data = request.get_json()
     champs_requis = ["nom", "pays", "ville", "telephone", "mot_de_passe"]
