@@ -1012,6 +1012,247 @@ class Commerce(db.Model):
         }
 
 
+class OffreTroc(db.Model):
+    """Un producteur propose d'échanger un produit contre un autre, sans argent."""
+    __tablename__ = "offres_troc"
+
+    id = db.Column(db.Integer, primary_key=True)
+    producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+    produit_propose = db.Column(db.String(150), nullable=False)
+    quantite_proposee = db.Column(db.Float, nullable=False)
+    unite = db.Column(db.String(30), default="kg")
+    produit_recherche = db.Column(db.String(255), nullable=False)  # ce qu'il veut en échange
+    description = db.Column(db.Text)
+    statut = db.Column(db.String(20), default="ouverte")  # ouverte / conclue / annulee
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    producteur = db.relationship("Producteur", backref="offres_troc")
+    propositions = db.relationship("PropositionTroc", backref="offre", lazy=True, cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            "id": self.id, "producteur_id": self.producteur_id,
+            "producteur_nom": self.producteur.nom if self.producteur else None,
+            "producteur_ville": self.producteur.ville if self.producteur else None,
+            "producteur_pays": self.producteur.pays if self.producteur else None,
+            "produit_propose": self.produit_propose, "quantite_proposee": self.quantite_proposee, "unite": self.unite,
+            "produit_recherche": self.produit_recherche, "description": self.description,
+            "statut": self.statut, "date_creation": self.date_creation.isoformat(),
+            "nombre_propositions": len(self.propositions),
+        }
+
+
+class PropositionTroc(db.Model):
+    """Contre-proposition d'un autre producteur pour répondre à une offre de troc."""
+    __tablename__ = "propositions_troc"
+
+    id = db.Column(db.Integer, primary_key=True)
+    offre_troc_id = db.Column(db.Integer, db.ForeignKey("offres_troc.id"), nullable=False)
+    producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+    produit_offert_en_retour = db.Column(db.String(150), nullable=False)
+    quantite = db.Column(db.Float, nullable=False)
+    unite = db.Column(db.String(30), default="kg")
+    message = db.Column(db.Text)
+    statut = db.Column(db.String(20), default="proposee")  # proposee / acceptee / refusee
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    producteur = db.relationship("Producteur", backref="propositions_troc")
+
+    def to_dict(self):
+        return {
+            "id": self.id, "offre_troc_id": self.offre_troc_id,
+            "producteur_id": self.producteur_id, "producteur_nom": self.producteur.nom if self.producteur else None,
+            "producteur_telephone": self.producteur.telephone if self.producteur else None,
+            "produit_offert_en_retour": self.produit_offert_en_retour, "quantite": self.quantite, "unite": self.unite,
+            "message": self.message, "statut": self.statut, "date_creation": self.date_creation.isoformat(),
+        }
+
+
+class JourMarche(db.Model):
+    """Calendrier communautaire des jours de marché traditionnels par village/ville."""
+    __tablename__ = "jours_marche"
+
+    id = db.Column(db.Integer, primary_key=True)
+    ville = db.Column(db.String(100), nullable=False)
+    pays = db.Column(db.String(50), nullable=False)
+    jour_semaine = db.Column(db.Integer, nullable=False)  # 0 = lundi ... 6 = dimanche
+    nom_marche = db.Column(db.String(150))  # ex: "Grand marché de Bouaké"
+    description = db.Column(db.Text)
+    ajoute_par_producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"))
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        jours = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+        return {
+            "id": self.id, "ville": self.ville, "pays": self.pays,
+            "jour_semaine": self.jour_semaine, "jour_semaine_label": jours[self.jour_semaine],
+            "nom_marche": self.nom_marche, "description": self.description,
+        }
+
+
+class Tontine(db.Model):
+    """Tontine digitale : épargne tournante entre producteurs. Chaque cycle, un membre différent
+    reçoit le pot commun, selon un ordre de rotation fixé à l'adhésion."""
+    __tablename__ = "tontines"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(150), nullable=False)
+    createur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+    pays = db.Column(db.String(50), nullable=False)
+    ville = db.Column(db.String(100), nullable=False)
+    montant_cotisation = db.Column(db.Float, nullable=False)  # montant fixe par membre et par cycle
+    frequence = db.Column(db.String(20), default="mensuelle")  # hebdomadaire / mensuelle
+    nombre_membres_max = db.Column(db.Integer, nullable=False)
+    cycle_actuel = db.Column(db.Integer, default=1)
+    statut = db.Column(db.String(20), default="ouverte")  # ouverte (recrute encore) / en_cours / terminee
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    createur = db.relationship("Producteur", backref="tontines_creees")
+    membres = db.relationship("MembreTontine", backref="tontine", lazy=True, cascade="all, delete-orphan", order_by="MembreTontine.ordre_tour")
+    cotisations = db.relationship("CotisationTontine", backref="tontine", lazy=True, cascade="all, delete-orphan")
+
+    def beneficiaire_cycle_actuel(self):
+        for m in self.membres:
+            if m.ordre_tour == ((self.cycle_actuel - 1) % max(1, len(self.membres))) + 1:
+                return m
+        return None
+
+    def to_dict(self):
+        beneficiaire = self.beneficiaire_cycle_actuel()
+        return {
+            "id": self.id, "nom": self.nom, "createur_id": self.createur_id,
+            "createur_nom": self.createur.nom if self.createur else None,
+            "pays": self.pays, "ville": self.ville,
+            "montant_cotisation": self.montant_cotisation, "frequence": self.frequence,
+            "nombre_membres_max": self.nombre_membres_max, "nombre_membres_actuel": len(self.membres),
+            "cycle_actuel": self.cycle_actuel, "statut": self.statut,
+            "beneficiaire_cycle_actuel": beneficiaire.producteur.nom if beneficiaire and beneficiaire.producteur else None,
+            "date_creation": self.date_creation.isoformat(),
+        }
+
+
+class MembreTontine(db.Model):
+    __tablename__ = "membres_tontine"
+
+    id = db.Column(db.Integer, primary_key=True)
+    tontine_id = db.Column(db.Integer, db.ForeignKey("tontines.id"), nullable=False)
+    producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+    ordre_tour = db.Column(db.Integer, nullable=False)  # position dans la rotation (1, 2, 3...)
+    date_adhesion = db.Column(db.DateTime, default=datetime.utcnow)
+
+    producteur = db.relationship("Producteur", backref="tontines_rejointes")
+
+    def to_dict(self):
+        return {
+            "id": self.id, "tontine_id": self.tontine_id,
+            "producteur_id": self.producteur_id, "producteur_nom": self.producteur.nom if self.producteur else None,
+            "producteur_telephone": self.producteur.telephone if self.producteur else None,
+            "ordre_tour": self.ordre_tour, "date_adhesion": self.date_adhesion.isoformat(),
+        }
+
+
+class CotisationTontine(db.Model):
+    """Cotisation d'un membre pour un cycle donné. Validée manuellement par l'admin
+    (même principe que les recharges agent), en attendant un paiement en ligne actif."""
+    __tablename__ = "cotisations_tontine"
+
+    id = db.Column(db.Integer, primary_key=True)
+    tontine_id = db.Column(db.Integer, db.ForeignKey("tontines.id"), nullable=False)
+    membre_id = db.Column(db.Integer, db.ForeignKey("membres_tontine.id"), nullable=False)
+    cycle_numero = db.Column(db.Integer, nullable=False)
+    montant = db.Column(db.Float, nullable=False)
+    reference = db.Column(db.String(120))
+    statut = db.Column(db.String(20), default="declaree")  # declaree / validee
+    date_declaration = db.Column(db.DateTime, default=datetime.utcnow)
+    date_validation = db.Column(db.DateTime)
+
+    membre = db.relationship("MembreTontine", backref="cotisations")
+
+    def to_dict(self):
+        return {
+            "id": self.id, "tontine_id": self.tontine_id, "membre_id": self.membre_id,
+            "membre_nom": self.membre.producteur.nom if self.membre and self.membre.producteur else None,
+            "cycle_numero": self.cycle_numero, "montant": self.montant, "reference": self.reference,
+            "statut": self.statut, "date_declaration": self.date_declaration.isoformat(),
+        }
+
+
+class OffreEmploi(db.Model):
+    """Offre d'emploi publiée par une entreprise, un producteur ou toute structure recherchant du personnel."""
+    __tablename__ = "offres_emploi"
+
+    id = db.Column(db.Integer, primary_key=True)
+    entreprise_nom = db.Column(db.String(150), nullable=False)
+    titre_poste = db.Column(db.String(150), nullable=False)
+    description_poste = db.Column(db.Text, nullable=False)
+    type_contrat = db.Column(db.String(30), default="CDI")  # CDI / CDD / Stage / Freelance / Saisonnier
+    salaire_propose = db.Column(db.String(100))  # texte libre, ex: "150 000 - 200 000 FCFA/mois"
+    pays = db.Column(db.String(50), nullable=False)
+    ville = db.Column(db.String(100), nullable=False)
+    telephone_contact = db.Column(db.String(30), nullable=False)
+    statut = db.Column(db.String(20), default="ouverte")  # ouverte / fermee
+    date_publication = db.Column(db.DateTime, default=datetime.utcnow)
+
+    candidatures = db.relationship("Candidature", backref="offre", lazy=True, cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            "id": self.id, "entreprise_nom": self.entreprise_nom, "titre_poste": self.titre_poste,
+            "description_poste": self.description_poste, "type_contrat": self.type_contrat,
+            "salaire_propose": self.salaire_propose, "pays": self.pays, "ville": self.ville,
+            "telephone_contact": self.telephone_contact, "statut": self.statut,
+            "date_publication": self.date_publication.isoformat(),
+            "nombre_candidatures": len(self.candidatures),
+        }
+
+
+class Candidature(db.Model):
+    """Candidature spontanée d'un utilisateur à une offre d'emploi."""
+    __tablename__ = "candidatures"
+
+    id = db.Column(db.Integer, primary_key=True)
+    offre_emploi_id = db.Column(db.Integer, db.ForeignKey("offres_emploi.id"), nullable=False)
+    nom = db.Column(db.String(120), nullable=False)
+    telephone = db.Column(db.String(30), nullable=False)
+    message = db.Column(db.Text)
+    date_candidature = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "offre_emploi_id": self.offre_emploi_id,
+            "nom": self.nom, "telephone": self.telephone, "message": self.message,
+            "date_candidature": self.date_candidature.isoformat(),
+        }
+
+
+class OpportuniteInvestissement(db.Model):
+    """Annonce de recherche d'investisseurs pour un projet. Mise en relation uniquement :
+    aucune transaction financière ne passe par AgriChange, exactement comme pour les terrains."""
+    __tablename__ = "opportunites_investissement"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nom_projet = db.Column(db.String(150), nullable=False)
+    entreprise_porteuse = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    secteur = db.Column(db.String(100))
+    montant_recherche = db.Column(db.String(100))  # texte libre, ex: "5 000 000 FCFA"
+    pays = db.Column(db.String(50), nullable=False)
+    ville = db.Column(db.String(100), nullable=False)
+    contact_nom = db.Column(db.String(120), nullable=False)
+    contact_telephone = db.Column(db.String(30), nullable=False)
+    statut = db.Column(db.String(20), default="ouverte")  # ouverte / clotturee
+    date_publication = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "nom_projet": self.nom_projet, "entreprise_porteuse": self.entreprise_porteuse,
+            "description": self.description, "secteur": self.secteur, "montant_recherche": self.montant_recherche,
+            "pays": self.pays, "ville": self.ville, "contact_nom": self.contact_nom,
+            "contact_telephone": self.contact_telephone, "statut": self.statut,
+            "date_publication": self.date_publication.isoformat(),
+        }
+
+
 class Cooperative(db.Model):
     """Coopérative virtuelle : regroupement de producteurs pour négocier ensemble de plus gros volumes."""
     __tablename__ = "cooperatives"
