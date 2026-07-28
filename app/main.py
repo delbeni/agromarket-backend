@@ -8,6 +8,8 @@ from models import (
     AgentMarchand, RetraitAgent, RechargeAgent,
     Hotel, ChambreHotel, ReservationHotel, Restaurant, PlatMenu, CommandeNourriture,
     Commerce,
+    OffreTroc, PropositionTroc, JourMarche, Tontine, MembreTontine, CotisationTontine,
+    OffreEmploi, Candidature, OpportuniteInvestissement,
     TrajetPoint, RecolteFuture, ReservationRecolte, Cooperative, MembreCooperative, Invendu, Signalement,
     NumeroMobileMoney,
 )
@@ -2070,6 +2072,333 @@ def paydunya_ipn():
     db.session.commit()
 
     return jsonify({"message": "Paiement confirmé et commande mise à jour"}), 200
+
+
+@app.route("/api/producteurs/<int:producteur_id>/offres-troc", methods=["POST"])
+def creer_offre_troc(producteur_id):
+    Producteur.query.get_or_404(producteur_id)
+    data = request.get_json()
+    champs_requis = ["produit_propose", "quantite_proposee", "produit_recherche"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    offre = OffreTroc(
+        producteur_id=producteur_id, produit_propose=data["produit_propose"],
+        quantite_proposee=data["quantite_proposee"], unite=data.get("unite", "kg"),
+        produit_recherche=data["produit_recherche"], description=data.get("description", ""),
+    )
+    db.session.add(offre)
+    db.session.commit()
+    return jsonify({"message": "Offre de troc publiée", "offre": offre.to_dict()}), 201
+
+
+@app.route("/api/offres-troc", methods=["GET"])
+def lister_offres_troc():
+    query = OffreTroc.query.filter_by(statut="ouverte")
+    if request.args.get("pays"):
+        query = query.join(Producteur).filter(Producteur.pays == request.args["pays"])
+    offres = query.order_by(OffreTroc.date_creation.desc()).all()
+    return jsonify([o.to_dict() for o in offres])
+
+
+@app.route("/api/offres-troc/<int:offre_id>", methods=["GET"])
+def detail_offre_troc(offre_id):
+    offre = OffreTroc.query.get_or_404(offre_id)
+    data = offre.to_dict()
+    data["propositions"] = [p.to_dict() for p in offre.propositions]
+    return jsonify(data)
+
+
+@app.route("/api/offres-troc/<int:offre_id>/proposer", methods=["POST"])
+def proposer_troc(offre_id):
+    offre = OffreTroc.query.get_or_404(offre_id)
+    if offre.statut != "ouverte":
+        return jsonify({"erreur": "Cette offre n'est plus ouverte."}), 400
+    data = request.get_json()
+    champs_requis = ["producteur_id", "produit_offert_en_retour", "quantite"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    proposition = PropositionTroc(
+        offre_troc_id=offre_id, producteur_id=data["producteur_id"],
+        produit_offert_en_retour=data["produit_offert_en_retour"], quantite=data["quantite"],
+        unite=data.get("unite", "kg"), message=data.get("message", ""),
+    )
+    db.session.add(proposition)
+    db.session.commit()
+    return jsonify({"message": "Proposition envoyée", "proposition": proposition.to_dict()}), 201
+
+
+@app.route("/api/propositions-troc/<int:proposition_id>/accepter", methods=["PUT"])
+def accepter_proposition_troc(proposition_id):
+    proposition = PropositionTroc.query.get_or_404(proposition_id)
+    proposition.statut = "acceptee"
+    proposition.offre.statut = "conclue"
+    db.session.commit()
+    return jsonify({"message": "Échange conclu ! Mettez-vous en contact pour organiser la remise.", "proposition": proposition.to_dict()})
+
+
+@app.route("/api/propositions-troc/<int:proposition_id>/refuser", methods=["PUT"])
+def refuser_proposition_troc(proposition_id):
+    proposition = PropositionTroc.query.get_or_404(proposition_id)
+    proposition.statut = "refusee"
+    db.session.commit()
+    return jsonify({"message": "Proposition refusée", "proposition": proposition.to_dict()})
+
+
+# ---------- Jours de marché (calendrier communautaire) ----------
+
+@app.route("/api/jours-marche", methods=["POST"])
+def ajouter_jour_marche():
+    data = request.get_json()
+    champs_requis = ["ville", "pays", "jour_semaine"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if not (0 <= int(data["jour_semaine"]) <= 6):
+        return jsonify({"erreur": "jour_semaine doit être entre 0 (lundi) et 6 (dimanche)"}), 400
+
+    jour = JourMarche(
+        ville=data["ville"], pays=data["pays"], jour_semaine=int(data["jour_semaine"]),
+        nom_marche=data.get("nom_marche", ""), description=data.get("description", ""),
+        ajoute_par_producteur_id=data.get("producteur_id"),
+    )
+    db.session.add(jour)
+    db.session.commit()
+    return jsonify({"message": "Jour de marché ajouté", "jour_marche": jour.to_dict()}), 201
+
+
+@app.route("/api/jours-marche", methods=["GET"])
+def lister_jours_marche():
+    query = JourMarche.query
+    if request.args.get("pays"):
+        query = query.filter_by(pays=request.args["pays"])
+    if request.args.get("ville"):
+        query = query.filter(JourMarche.ville.ilike(f"%{request.args['ville']}%"))
+    jours = query.order_by(JourMarche.jour_semaine).all()
+    return jsonify([j.to_dict() for j in jours])
+
+
+@app.route("/api/jours-marche/aujourdhui", methods=["GET"])
+def jours_marche_aujourdhui():
+    jour_semaine_auj = datetime.utcnow().weekday()  # 0 = lundi
+    query = JourMarche.query.filter_by(jour_semaine=jour_semaine_auj)
+    if request.args.get("pays"):
+        query = query.filter_by(pays=request.args["pays"])
+    jours = query.all()
+    return jsonify([j.to_dict() for j in jours])
+
+
+# ---------- Tontine digitale (épargne tournante) ----------
+
+@app.route("/api/producteurs/<int:producteur_id>/tontines", methods=["POST"])
+def creer_tontine(producteur_id):
+    Producteur.query.get_or_404(producteur_id)
+    data = request.get_json()
+    champs_requis = ["nom", "pays", "ville", "montant_cotisation", "nombre_membres_max"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    tontine = Tontine(
+        nom=data["nom"], createur_id=producteur_id, pays=data["pays"], ville=data["ville"],
+        montant_cotisation=data["montant_cotisation"], frequence=data.get("frequence", "mensuelle"),
+        nombre_membres_max=data["nombre_membres_max"],
+    )
+    db.session.add(tontine)
+    db.session.flush()
+
+    # le créateur rejoint automatiquement en premier
+    premier_membre = MembreTontine(tontine_id=tontine.id, producteur_id=producteur_id, ordre_tour=1)
+    db.session.add(premier_membre)
+    db.session.commit()
+    return jsonify({"message": "Tontine créée", "tontine": tontine.to_dict()}), 201
+
+
+@app.route("/api/tontines", methods=["GET"])
+def lister_tontines():
+    query = Tontine.query
+    if request.args.get("pays"):
+        query = query.filter_by(pays=request.args["pays"])
+    if request.args.get("statut"):
+        query = query.filter_by(statut=request.args["statut"])
+    tontines = query.order_by(Tontine.date_creation.desc()).all()
+    return jsonify([t.to_dict() for t in tontines])
+
+
+@app.route("/api/tontines/<int:tontine_id>", methods=["GET"])
+def detail_tontine(tontine_id):
+    tontine = Tontine.query.get_or_404(tontine_id)
+    data = tontine.to_dict()
+    data["membres"] = [m.to_dict() for m in tontine.membres]
+    data["cotisations_cycle_actuel"] = [c.to_dict() for c in tontine.cotisations if c.cycle_numero == tontine.cycle_actuel]
+    return jsonify(data)
+
+
+@app.route("/api/tontines/<int:tontine_id>/rejoindre", methods=["POST"])
+def rejoindre_tontine(tontine_id):
+    tontine = Tontine.query.get_or_404(tontine_id)
+    if tontine.statut != "ouverte":
+        return jsonify({"erreur": "Cette tontine n'accepte plus de nouveaux membres."}), 400
+    if len(tontine.membres) >= tontine.nombre_membres_max:
+        return jsonify({"erreur": "Cette tontine est déjà complète."}), 400
+    data = request.get_json()
+    producteur_id = data.get("producteur_id")
+    if not producteur_id:
+        return jsonify({"erreur": "producteur_id requis"}), 400
+    if any(m.producteur_id == producteur_id for m in tontine.membres):
+        return jsonify({"erreur": "Tu es déjà membre de cette tontine."}), 409
+
+    ordre = len(tontine.membres) + 1
+    membre = MembreTontine(tontine_id=tontine_id, producteur_id=producteur_id, ordre_tour=ordre)
+    db.session.add(membre)
+    if ordre == tontine.nombre_membres_max:
+        tontine.statut = "en_cours"
+    db.session.commit()
+    return jsonify({"message": f"Tu as rejoint la tontine, ton tour arrivera au cycle {ordre}.", "membre": membre.to_dict(), "tontine": tontine.to_dict()}), 201
+
+
+@app.route("/api/tontines/<int:tontine_id>/cotiser", methods=["POST"])
+def declarer_cotisation_tontine(tontine_id):
+    tontine = Tontine.query.get_or_404(tontine_id)
+    data = request.get_json()
+    membre_id = data.get("membre_id")
+    if not membre_id:
+        return jsonify({"erreur": "membre_id requis"}), 400
+    membre = MembreTontine.query.get_or_404(membre_id)
+
+    cotisation = CotisationTontine(
+        tontine_id=tontine_id, membre_id=membre_id, cycle_numero=tontine.cycle_actuel,
+        montant=data.get("montant", tontine.montant_cotisation), reference=data.get("reference", ""),
+    )
+    db.session.add(cotisation)
+    db.session.commit()
+    return jsonify({"message": "Cotisation déclarée, en attente de validation", "cotisation": cotisation.to_dict()}), 201
+
+
+@app.route("/api/admin/cotisations-tontine/<int:cotisation_id>/valider", methods=["POST"])
+def admin_valider_cotisation_tontine(cotisation_id):
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    cotisation = CotisationTontine.query.get_or_404(cotisation_id)
+    cotisation.statut = "validee"
+    cotisation.date_validation = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"message": "Cotisation validée", "cotisation": cotisation.to_dict()})
+
+
+@app.route("/api/tontines/<int:tontine_id>/cycle-suivant", methods=["POST"])
+def passer_cycle_suivant_tontine(tontine_id):
+    """Une fois que toutes les cotisations du cycle sont validées et le pot versé au bénéficiaire,
+    on passe au cycle suivant (le tour passe au membre suivant dans la rotation)."""
+    tontine = Tontine.query.get_or_404(tontine_id)
+    tontine.cycle_actuel += 1
+    if tontine.cycle_actuel > len(tontine.membres):
+        tontine.statut = "terminee"
+    db.session.commit()
+    return jsonify({"message": "Cycle suivant démarré", "tontine": tontine.to_dict()})
+
+
+@app.route("/api/offres-emploi", methods=["POST"])
+def creer_offre_emploi():
+    data = request.get_json()
+    champs_requis = ["entreprise_nom", "titre_poste", "description_poste", "pays", "ville", "telephone_contact"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    offre = OffreEmploi(
+        entreprise_nom=data["entreprise_nom"], titre_poste=data["titre_poste"],
+        description_poste=data["description_poste"], type_contrat=data.get("type_contrat", "CDI"),
+        salaire_propose=data.get("salaire_propose", ""), pays=data["pays"], ville=data["ville"],
+        telephone_contact=data["telephone_contact"],
+    )
+    db.session.add(offre)
+    db.session.commit()
+    return jsonify({"message": "Offre d'emploi publiée", "offre": offre.to_dict()}), 201
+
+
+@app.route("/api/offres-emploi", methods=["GET"])
+def lister_offres_emploi():
+    query = OffreEmploi.query.filter_by(statut="ouverte")
+    if request.args.get("pays"):
+        query = query.filter_by(pays=request.args["pays"])
+    if request.args.get("ville"):
+        query = query.filter(OffreEmploi.ville.ilike(f"%{request.args['ville']}%"))
+    offres = query.order_by(OffreEmploi.date_publication.desc()).all()
+    return jsonify([o.to_dict() for o in offres])
+
+
+@app.route("/api/offres-emploi/<int:offre_id>", methods=["GET"])
+def detail_offre_emploi(offre_id):
+    offre = OffreEmploi.query.get_or_404(offre_id)
+    data = offre.to_dict()
+    data["candidatures"] = [c.to_dict() for c in offre.candidatures]
+    return jsonify(data)
+
+
+@app.route("/api/offres-emploi/<int:offre_id>/candidater", methods=["POST"])
+def candidater_offre_emploi(offre_id):
+    OffreEmploi.query.get_or_404(offre_id)
+    data = request.get_json()
+    champs_requis = ["nom", "telephone"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    candidature = Candidature(offre_emploi_id=offre_id, nom=data["nom"], telephone=data["telephone"], message=data.get("message", ""))
+    db.session.add(candidature)
+    db.session.commit()
+    return jsonify({"message": "Candidature envoyée", "candidature": candidature.to_dict()}), 201
+
+
+@app.route("/api/offres-emploi/<int:offre_id>/statut", methods=["PUT"])
+def changer_statut_offre_emploi(offre_id):
+    offre = OffreEmploi.query.get_or_404(offre_id)
+    data = request.get_json() or {}
+    if data.get("statut") not in ["ouverte", "fermee"]:
+        return jsonify({"erreur": "Statut invalide"}), 400
+    offre.statut = data["statut"]
+    db.session.commit()
+    return jsonify({"message": "Statut mis à jour", "offre": offre.to_dict()})
+
+
+# ---------- Opportunités d'investissement (mise en relation uniquement, aucune transaction) ----------
+
+@app.route("/api/opportunites-investissement", methods=["POST"])
+def creer_opportunite_investissement():
+    data = request.get_json()
+    champs_requis = ["nom_projet", "entreprise_porteuse", "description", "pays", "ville", "contact_nom", "contact_telephone"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    opportunite = OpportuniteInvestissement(
+        nom_projet=data["nom_projet"], entreprise_porteuse=data["entreprise_porteuse"],
+        description=data["description"], secteur=data.get("secteur", ""),
+        montant_recherche=data.get("montant_recherche", ""), pays=data["pays"], ville=data["ville"],
+        contact_nom=data["contact_nom"], contact_telephone=data["contact_telephone"],
+    )
+    db.session.add(opportunite)
+    db.session.commit()
+    return jsonify({"message": "Opportunité publiée", "opportunite": opportunite.to_dict()}), 201
+
+
+@app.route("/api/opportunites-investissement", methods=["GET"])
+def lister_opportunites_investissement():
+    query = OpportuniteInvestissement.query.filter_by(statut="ouverte")
+    if request.args.get("pays"):
+        query = query.filter_by(pays=request.args["pays"])
+    opportunites = query.order_by(OpportuniteInvestissement.date_publication.desc()).all()
+    return jsonify([o.to_dict() for o in opportunites])
+
+
+@app.route("/api/opportunites-investissement/<int:opportunite_id>", methods=["GET"])
+def detail_opportunite_investissement(opportunite_id):
+    opportunite = OpportuniteInvestissement.query.get_or_404(opportunite_id)
+    return jsonify(opportunite.to_dict())
 
 
 @app.route("/api/commerces/inscription", methods=["POST"])
