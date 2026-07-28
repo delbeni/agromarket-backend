@@ -7,6 +7,7 @@ from models import (
     PromesseFinancement, Terrain, CodePremium, NotairePartenaire, Beneficiaire, TransfertArgent,
     AgentMarchand, RetraitAgent, RechargeAgent,
     Hotel, ChambreHotel, ReservationHotel, Restaurant, PlatMenu, CommandeNourriture,
+    Commerce,
     TrajetPoint, RecolteFuture, ReservationRecolte, Cooperative, MembreCooperative, Invendu, Signalement,
     NumeroMobileMoney,
 )
@@ -2071,7 +2072,49 @@ def paydunya_ipn():
     return jsonify({"message": "Paiement confirmé et commande mise à jour"}), 200
 
 
+@app.route("/api/commerces/inscription", methods=["POST"])
+def inscrire_commerce():
+    """Inscription universelle : accepte n'importe quel type d'activité, même hors des catégories connues."""
+    data = request.get_json()
+    champs_requis = ["nom", "description_activite", "pays", "ville", "telephone"]
+    manquants = [c for c in champs_requis if not data.get(c)]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
 
+    commerce = Commerce(
+        nom=data["nom"], categorie=data.get("categorie", "autre"),
+        description_activite=data["description_activite"],
+        pays=data["pays"], ville=data["ville"], telephone=data["telephone"], photo=data.get("photo", ""),
+    )
+    db.session.add(commerce)
+    db.session.commit()
+    return jsonify({"message": "Commerce inscrit dans l'annuaire", "commerce": commerce.to_dict()}), 201
+
+
+@app.route("/api/commerces", methods=["GET"])
+def lister_commerces():
+    """Recherche dans l'annuaire, par catégorie, pays, ville, ou mot-clé dans la description."""
+    query = Commerce.query.filter_by(actif=True)
+    if request.args.get("categorie"):
+        query = query.filter_by(categorie=request.args["categorie"])
+    if request.args.get("pays"):
+        query = query.filter_by(pays=request.args["pays"])
+    if request.args.get("ville"):
+        query = query.filter(Commerce.ville.ilike(f"%{request.args['ville']}%"))
+    if request.args.get("q"):
+        mot = f"%{request.args['q']}%"
+        query = query.filter(db.or_(Commerce.nom.ilike(mot), Commerce.description_activite.ilike(mot)))
+    commerces = query.order_by(Commerce.date_inscription.desc()).all()
+    return jsonify([c.to_dict() for c in commerces])
+
+
+@app.route("/api/commerces/<int:commerce_id>", methods=["GET"])
+def detail_commerce(commerce_id):
+    commerce = Commerce.query.get_or_404(commerce_id)
+    return jsonify(commerce.to_dict())
+
+
+@app.route("/api/hotels/inscription", methods=["POST"])
 def inscrire_hotel():
     data = request.get_json()
     champs_requis = ["nom", "pays", "ville", "telephone", "mot_de_passe"]
