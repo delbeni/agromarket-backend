@@ -986,6 +986,32 @@ class CommandeNourriture(db.Model):
         }
 
 
+class Commerce(db.Model):
+    """Annuaire universel : n'importe quel type de commerce ou service peut s'inscrire ici,
+    même s'il ne correspond à aucune catégorie spécifique déjà codée dans l'app (hôtel, restaurant...).
+    C'est la porte d'entrée pour tout business qui n'a pas encore de système dédié."""
+    __tablename__ = "commerces"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(150), nullable=False)
+    categorie = db.Column(db.String(30), default="autre")  # ecommerce / restaurant / finance / client_service / autre
+    description_activite = db.Column(db.Text, nullable=False)  # "ce qu'il fait", en texte libre
+    pays = db.Column(db.String(50), nullable=False)
+    ville = db.Column(db.String(100), nullable=False)
+    telephone = db.Column(db.String(30), nullable=False)
+    photo = db.Column(db.String(255))
+    actif = db.Column(db.Boolean, default=True)
+    date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "nom": self.nom, "categorie": self.categorie,
+            "description_activite": self.description_activite,
+            "pays": self.pays, "ville": self.ville, "telephone": self.telephone, "photo": self.photo,
+            "date_inscription": self.date_inscription.isoformat(),
+        }
+
+
 class Cooperative(db.Model):
     """Coopérative virtuelle : regroupement de producteurs pour négocier ensemble de plus gros volumes."""
     __tablename__ = "cooperatives"
