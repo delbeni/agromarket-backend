@@ -10,6 +10,7 @@ from models import (
     Commerce,
     OffreTroc, PropositionTroc, JourMarche, Tontine, MembreTontine, CotisationTontine,
     OffreEmploi, Candidature, OpportuniteInvestissement,
+    CourseTaxi,
     TrajetPoint, RecolteFuture, ReservationRecolte, Cooperative, MembreCooperative, Invendu, Signalement,
     NumeroMobileMoney,
 )
@@ -1224,6 +1225,10 @@ def inscription_agent():
         pays=data["pays"], ville=data.get("ville", ""),
         operateur_mobile_money=data.get("operateur_mobile_money", ""),
         numero_mobile_money=data.get("numero_mobile_money", ""),
+        type_piece_identite=data.get("type_piece_identite", ""),
+        numero_piece_identite=data.get("numero_piece_identite", ""),
+        piece_identite_recto=data.get("piece_identite_recto", ""),
+        piece_identite_verso=data.get("piece_identite_verso", ""),
     )
     db.session.add(agent)
     db.session.commit()
@@ -2299,6 +2304,70 @@ def passer_cycle_suivant_tontine(tontine_id):
         tontine.statut = "terminee"
     db.session.commit()
     return jsonify({"message": "Cycle suivant démarré", "tontine": tontine.to_dict()})
+
+
+@app.route("/api/courses-taxi", methods=["POST"])
+def creer_course_taxi():
+    data = request.get_json()
+    champs_requis = ["client_nom", "client_telephone", "latitude_depart", "longitude_depart", "adresse_arrivee"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    course = CourseTaxi(
+        client_nom=data["client_nom"], client_telephone=data["client_telephone"],
+        latitude_depart=data["latitude_depart"], longitude_depart=data["longitude_depart"],
+        adresse_depart=data.get("adresse_depart", ""),
+        latitude_arrivee=data.get("latitude_arrivee"), longitude_arrivee=data.get("longitude_arrivee"),
+        adresse_arrivee=data["adresse_arrivee"], prix_propose=data.get("prix_propose"),
+    )
+    db.session.add(course)
+    db.session.commit()
+    return jsonify({"message": "Course demandée, en attente d'un chauffeur", "course": course.to_dict()}), 201
+
+
+@app.route("/api/courses-taxi-disponibles", methods=["GET"])
+def lister_courses_taxi_disponibles():
+    courses = CourseTaxi.query.filter_by(statut="en_attente").order_by(CourseTaxi.date_creation.desc()).all()
+    return jsonify([c.to_dict() for c in courses])
+
+
+@app.route("/api/courses-taxi/<int:course_id>", methods=["GET"])
+def detail_course_taxi(course_id):
+    course = CourseTaxi.query.get_or_404(course_id)
+    return jsonify(course.to_dict())
+
+
+@app.route("/api/courses-taxi/<int:course_id>/accepter", methods=["PUT"])
+def accepter_course_taxi(course_id):
+    course = CourseTaxi.query.get_or_404(course_id)
+    if course.statut != "en_attente":
+        return jsonify({"erreur": "Cette course n'est plus disponible."}), 400
+    data = request.get_json()
+    if not data.get("livreur_id"):
+        return jsonify({"erreur": "livreur_id requis"}), 400
+    course.livreur_id = data["livreur_id"]
+    course.statut = "acceptee"
+    db.session.commit()
+    return jsonify({"message": "Course acceptée", "course": course.to_dict()})
+
+
+@app.route("/api/courses-taxi/<int:course_id>/statut", methods=["PUT"])
+def changer_statut_course_taxi(course_id):
+    course = CourseTaxi.query.get_or_404(course_id)
+    data = request.get_json() or {}
+    if data.get("statut") not in ["en_attente", "acceptee", "en_cours", "terminee", "annulee"]:
+        return jsonify({"erreur": "Statut invalide"}), 400
+    course.statut = data["statut"]
+    db.session.commit()
+    return jsonify({"message": "Statut mis à jour", "course": course.to_dict()})
+
+
+@app.route("/api/livreurs/<int:livreur_id>/courses-taxi", methods=["GET"])
+def lister_courses_taxi_livreur(livreur_id):
+    Livreur.query.get_or_404(livreur_id)
+    courses = CourseTaxi.query.filter_by(livreur_id=livreur_id).order_by(CourseTaxi.date_creation.desc()).all()
+    return jsonify([c.to_dict() for c in courses])
 
 
 @app.route("/api/offres-emploi", methods=["POST"])
