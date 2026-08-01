@@ -729,6 +729,8 @@ class AgentMarchand(db.Model):
     numero_mobile_money = db.Column(db.String(30))
 
     # Vérification d'identité obligatoire (il manipule l'argent de tiers, comme producteurs/livreurs)
+    type_piece_identite = db.Column(db.String(20))  # CNI / Passeport
+    numero_piece_identite = db.Column(db.String(50))
     piece_identite_recto = db.Column(db.String(255))
     piece_identite_verso = db.Column(db.String(255))
     identite_verifiee = db.Column(db.Boolean, default=False)
@@ -757,6 +759,8 @@ class AgentMarchand(db.Model):
             "ville": self.ville,
             "operateur_mobile_money": self.operateur_mobile_money,
             "numero_mobile_money": self.numero_mobile_money,
+            "type_piece_identite": self.type_piece_identite, "numero_piece_identite": self.numero_piece_identite,
+            "piece_identite_recto": self.piece_identite_recto, "piece_identite_verso": self.piece_identite_verso,
             "identite_verifiee": self.identite_verifiee,
             "solde_disponible": self.solde_disponible,
             "solde_commission": self.solde_commission,
@@ -1250,6 +1254,42 @@ class OpportuniteInvestissement(db.Model):
             "pays": self.pays, "ville": self.ville, "contact_nom": self.contact_nom,
             "contact_telephone": self.contact_telephone, "statut": self.statut,
             "date_publication": self.date_publication.isoformat(),
+        }
+
+
+class CourseTaxi(db.Model):
+    """Course de transport de personnes, distincte d'une livraison de colis.
+    Réutilise le réseau de livreurs existant (même position en direct, même disponibilité)."""
+    __tablename__ = "courses_taxi"
+
+    id = db.Column(db.Integer, primary_key=True)
+    livreur_id = db.Column(db.Integer, db.ForeignKey("livreurs.id"))  # None tant que personne n'a accepté
+
+    client_nom = db.Column(db.String(120), nullable=False)
+    client_telephone = db.Column(db.String(30), nullable=False)
+
+    latitude_depart = db.Column(db.Float, nullable=False)
+    longitude_depart = db.Column(db.Float, nullable=False)
+    adresse_depart = db.Column(db.String(255))  # repère textuel, ex: "devant la pharmacie X"
+    latitude_arrivee = db.Column(db.Float)
+    longitude_arrivee = db.Column(db.Float)
+    adresse_arrivee = db.Column(db.String(255), nullable=False)
+
+    prix_propose = db.Column(db.Float)  # négocié à l'avance entre client et chauffeur, comme les frais de livraison
+    statut = db.Column(db.String(20), default="en_attente")  # en_attente / acceptee / en_cours / terminee / annulee
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    livreur = db.relationship("Livreur", backref="courses_taxi")
+
+    def to_dict(self):
+        return {
+            "id": self.id, "livreur_id": self.livreur_id, "livreur_nom": self.livreur.nom if self.livreur else None,
+            "livreur_telephone": self.livreur.telephone if self.livreur else None,
+            "livreur_vehicule": self.livreur.vehicule if self.livreur else None,
+            "client_nom": self.client_nom, "client_telephone": self.client_telephone,
+            "latitude_depart": self.latitude_depart, "longitude_depart": self.longitude_depart, "adresse_depart": self.adresse_depart,
+            "latitude_arrivee": self.latitude_arrivee, "longitude_arrivee": self.longitude_arrivee, "adresse_arrivee": self.adresse_arrivee,
+            "prix_propose": self.prix_propose, "statut": self.statut, "date_creation": self.date_creation.isoformat(),
         }
 
 
