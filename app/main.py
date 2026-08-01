@@ -2472,21 +2472,37 @@ def detail_opportunite_investissement(opportunite_id):
 
 @app.route("/api/commerces/inscription", methods=["POST"])
 def inscrire_commerce():
-    """Inscription universelle : accepte n'importe quel type d'activité, même hors des catégories connues."""
+    """Inscription universelle : accepte n'importe quel type d'activité, même hors des catégories connues.
+    Vérification d'identité (pièce + GPS) obligatoire, plusieurs photos publicitaires possibles."""
     data = request.get_json()
     champs_requis = ["nom", "description_activite", "pays", "ville", "telephone"]
     manquants = [c for c in champs_requis if not data.get(c)]
     if manquants:
         return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if not data.get("numero_piece_identite") or not data.get("piece_identite_recto") or not data.get("piece_identite_verso"):
+        return jsonify({"erreur": "Pièce d'identité (numéro + recto + verso) obligatoire."}), 400
+    if data.get("latitude") is None or data.get("longitude") is None:
+        return jsonify({"erreur": "Position GPS requise."}), 400
+
+    photos = data.get("photos", [])
+    if not isinstance(photos, list):
+        photos = []
 
     commerce = Commerce(
         nom=data["nom"], categorie=data.get("categorie", "autre"),
         description_activite=data["description_activite"],
-        pays=data["pays"], ville=data["ville"], telephone=data["telephone"], photo=data.get("photo", ""),
+        pays=data["pays"], ville=data["ville"], telephone=data["telephone"],
+        photos=json.dumps(photos[:6]),
+        mot_de_passe_hash=generate_password_hash(data["mot_de_passe"]) if data.get("mot_de_passe") else None,
+        latitude=data["latitude"], longitude=data["longitude"],
+        type_piece_identite=data.get("type_piece_identite", "CNI"),
+        numero_piece_identite=data["numero_piece_identite"],
+        piece_identite_recto=data["piece_identite_recto"],
+        piece_identite_verso=data["piece_identite_verso"],
     )
     db.session.add(commerce)
     db.session.commit()
-    return jsonify({"message": "Commerce inscrit dans l'annuaire", "commerce": commerce.to_dict()}), 201
+    return jsonify({"message": "Commerce inscrit, en attente de vérification", "commerce": commerce.to_dict()}), 201
 
 
 @app.route("/api/commerces", methods=["GET"])
@@ -2514,23 +2530,39 @@ def detail_commerce(commerce_id):
 
 @app.route("/api/hotels/inscription", methods=["POST"])
 def inscrire_hotel():
+    """Inscription d'un hôtel. Vérification d'identité (pièce + GPS) obligatoire,
+    plusieurs photos publicitaires possibles."""
     data = request.get_json()
     champs_requis = ["nom", "pays", "ville", "telephone", "mot_de_passe"]
     manquants = [c for c in champs_requis if not data.get(c)]
     if manquants:
         return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if not data.get("numero_piece_identite") or not data.get("piece_identite_recto") or not data.get("piece_identite_verso"):
+        return jsonify({"erreur": "Pièce d'identité (numéro + recto + verso) obligatoire."}), 400
+    if data.get("latitude") is None or data.get("longitude") is None:
+        return jsonify({"erreur": "Position GPS requise."}), 400
     if Hotel.query.filter_by(telephone=data["telephone"]).first():
         return jsonify({"erreur": "Un hôtel est déjà inscrit avec ce numéro."}), 409
+
+    photos = data.get("photos", [])
+    if not isinstance(photos, list):
+        photos = []
 
     hotel = Hotel(
         nom=data["nom"], description=data.get("description", ""),
         pays=data["pays"], ville=data["ville"], adresse=data.get("adresse", ""),
-        telephone=data["telephone"], email=data.get("email", ""), photo=data.get("photo", ""),
+        telephone=data["telephone"], email=data.get("email", ""),
+        photos=json.dumps(photos[:6]),
         mot_de_passe_hash=generate_password_hash(data["mot_de_passe"]),
+        latitude=data["latitude"], longitude=data["longitude"],
+        type_piece_identite=data.get("type_piece_identite", "CNI"),
+        numero_piece_identite=data["numero_piece_identite"],
+        piece_identite_recto=data["piece_identite_recto"],
+        piece_identite_verso=data["piece_identite_verso"],
     )
     db.session.add(hotel)
     db.session.commit()
-    return jsonify({"message": "Hôtel inscrit", "hotel": hotel.to_dict()}), 201
+    return jsonify({"message": "Hôtel inscrit, en attente de vérification", "hotel": hotel.to_dict()}), 201
 
 
 @app.route("/api/hotels/connexion", methods=["POST"])
@@ -2645,23 +2677,39 @@ def changer_statut_reservation(reservation_id):
 
 @app.route("/api/restaurants/inscription", methods=["POST"])
 def inscrire_restaurant():
+    """Inscription d'un restaurant/cuisinière. Vérification d'identité (pièce + GPS) obligatoire,
+    plusieurs photos publicitaires possibles."""
     data = request.get_json()
     champs_requis = ["nom", "pays", "ville", "telephone", "mot_de_passe"]
     manquants = [c for c in champs_requis if not data.get(c)]
     if manquants:
         return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if not data.get("numero_piece_identite") or not data.get("piece_identite_recto") or not data.get("piece_identite_verso"):
+        return jsonify({"erreur": "Pièce d'identité (numéro + recto + verso) obligatoire."}), 400
+    if data.get("latitude") is None or data.get("longitude") is None:
+        return jsonify({"erreur": "Position GPS requise."}), 400
     if Restaurant.query.filter_by(telephone=data["telephone"]).first():
         return jsonify({"erreur": "Un établissement est déjà inscrit avec ce numéro."}), 409
+
+    photos = data.get("photos", [])
+    if not isinstance(photos, list):
+        photos = []
 
     restaurant = Restaurant(
         nom=data["nom"], type_etablissement=data.get("type_etablissement", "restaurant"),
         description=data.get("description", ""), pays=data["pays"], ville=data["ville"],
-        quartier=data.get("quartier", ""), telephone=data["telephone"], photo=data.get("photo", ""),
+        quartier=data.get("quartier", ""), telephone=data["telephone"],
+        photos=json.dumps(photos[:6]),
         mot_de_passe_hash=generate_password_hash(data["mot_de_passe"]),
+        latitude=data["latitude"], longitude=data["longitude"],
+        type_piece_identite=data.get("type_piece_identite", "CNI"),
+        numero_piece_identite=data["numero_piece_identite"],
+        piece_identite_recto=data["piece_identite_recto"],
+        piece_identite_verso=data["piece_identite_verso"],
     )
     db.session.add(restaurant)
     db.session.commit()
-    return jsonify({"message": "Établissement inscrit", "restaurant": restaurant.to_dict()}), 201
+    return jsonify({"message": "Établissement inscrit, en attente de vérification", "restaurant": restaurant.to_dict()}), 201
 
 
 @app.route("/api/restaurants/connexion", methods=["POST"])
