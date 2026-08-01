@@ -821,7 +821,8 @@ class RetraitAgent(db.Model):
 
 class Hotel(db.Model):
     """Établissement hôtelier partenaire, consultable et réservable depuis AgriChange
-    (utile notamment pour la diaspora qui veut réserver un hôtel en Afrique, ou l'inverse)."""
+    (utile notamment pour la diaspora qui veut réserver un hôtel en Afrique, ou l'inverse).
+    Vérification d'identité + GPS obligatoires, plusieurs photos publicitaires possibles."""
     __tablename__ = "hotels"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -832,18 +833,34 @@ class Hotel(db.Model):
     adresse = db.Column(db.String(255))
     telephone = db.Column(db.String(30), nullable=False)
     email = db.Column(db.String(120))
-    photo = db.Column(db.String(255))
+    photos = db.Column(db.Text)  # JSON: liste d'URLs (plusieurs photos publicitaires)
     mot_de_passe_hash = db.Column(db.String(255), nullable=False)
+
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+
+    type_piece_identite = db.Column(db.String(20))  # CNI / Passeport / Permis de conduire
+    numero_piece_identite = db.Column(db.String(50))
+    piece_identite_recto = db.Column(db.String(255))
+    piece_identite_verso = db.Column(db.String(255))
+    identite_verifiee = db.Column(db.Boolean, default=False)
+
     actif = db.Column(db.Boolean, default=True)
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
 
     chambres = db.relationship("ChambreHotel", backref="hotel", lazy=True, cascade="all, delete-orphan")
 
     def to_dict(self):
+        try:
+            photos = json.loads(self.photos) if self.photos else []
+        except (ValueError, TypeError):
+            photos = []
         return {
             "id": self.id, "nom": self.nom, "description": self.description,
             "pays": self.pays, "ville": self.ville, "adresse": self.adresse,
-            "telephone": self.telephone, "email": self.email, "photo": self.photo,
+            "telephone": self.telephone, "email": self.email, "photos": photos,
+            "latitude": self.latitude, "longitude": self.longitude,
+            "identite_verifiee": self.identite_verifiee,
             "nombre_chambres": len(self.chambres),
             "date_inscription": self.date_inscription.isoformat(),
         }
@@ -909,7 +926,8 @@ class ReservationHotel(db.Model):
 
 class Restaurant(db.Model):
     """Restaurant, mini-restaurant ou cuisinière/vendeuse de nourriture inscrite sur AgriChange,
-    pour permettre aux clients (ex: employés de bureau) de commander un repas livré."""
+    pour permettre aux clients (ex: employés de bureau) de commander un repas livré.
+    Vérification d'identité + GPS obligatoires, plusieurs photos publicitaires possibles."""
     __tablename__ = "restaurants"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -920,18 +938,34 @@ class Restaurant(db.Model):
     ville = db.Column(db.String(100), nullable=False)
     quartier = db.Column(db.String(100))
     telephone = db.Column(db.String(30), nullable=False)
-    photo = db.Column(db.String(255))
+    photos = db.Column(db.Text)  # JSON: liste d'URLs (plusieurs photos publicitaires)
     mot_de_passe_hash = db.Column(db.String(255), nullable=False)
+
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+
+    type_piece_identite = db.Column(db.String(20))
+    numero_piece_identite = db.Column(db.String(50))
+    piece_identite_recto = db.Column(db.String(255))
+    piece_identite_verso = db.Column(db.String(255))
+    identite_verifiee = db.Column(db.Boolean, default=False)
+
     actif = db.Column(db.Boolean, default=True)
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
 
     plats = db.relationship("PlatMenu", backref="restaurant", lazy=True, cascade="all, delete-orphan")
 
     def to_dict(self):
+        try:
+            photos = json.loads(self.photos) if self.photos else []
+        except (ValueError, TypeError):
+            photos = []
         return {
             "id": self.id, "nom": self.nom, "type_etablissement": self.type_etablissement,
             "description": self.description, "pays": self.pays, "ville": self.ville, "quartier": self.quartier,
-            "telephone": self.telephone, "photo": self.photo,
+            "telephone": self.telephone, "photos": photos,
+            "latitude": self.latitude, "longitude": self.longitude,
+            "identite_verifiee": self.identite_verifiee,
             "nombre_plats": len(self.plats),
             "date_inscription": self.date_inscription.isoformat(),
         }
@@ -993,7 +1027,8 @@ class CommandeNourriture(db.Model):
 class Commerce(db.Model):
     """Annuaire universel : n'importe quel type de commerce ou service peut s'inscrire ici,
     même s'il ne correspond à aucune catégorie spécifique déjà codée dans l'app (hôtel, restaurant...).
-    C'est la porte d'entrée pour tout business qui n'a pas encore de système dédié."""
+    C'est la porte d'entrée pour tout business qui n'a pas encore de système dédié.
+    Vérification d'identité + GPS obligatoires, plusieurs photos publicitaires possibles."""
     __tablename__ = "commerces"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -1003,15 +1038,32 @@ class Commerce(db.Model):
     pays = db.Column(db.String(50), nullable=False)
     ville = db.Column(db.String(100), nullable=False)
     telephone = db.Column(db.String(30), nullable=False)
-    photo = db.Column(db.String(255))
+    photos = db.Column(db.Text)  # JSON: liste d'URLs (plusieurs photos publicitaires)
+    mot_de_passe_hash = db.Column(db.String(255))
+
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+
+    type_piece_identite = db.Column(db.String(20))
+    numero_piece_identite = db.Column(db.String(50))
+    piece_identite_recto = db.Column(db.String(255))
+    piece_identite_verso = db.Column(db.String(255))
+    identite_verifiee = db.Column(db.Boolean, default=False)
+
     actif = db.Column(db.Boolean, default=True)
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
+        try:
+            photos = json.loads(self.photos) if self.photos else []
+        except (ValueError, TypeError):
+            photos = []
         return {
             "id": self.id, "nom": self.nom, "categorie": self.categorie,
             "description_activite": self.description_activite,
-            "pays": self.pays, "ville": self.ville, "telephone": self.telephone, "photo": self.photo,
+            "pays": self.pays, "ville": self.ville, "telephone": self.telephone, "photos": photos,
+            "latitude": self.latitude, "longitude": self.longitude,
+            "identite_verifiee": self.identite_verifiee,
             "date_inscription": self.date_inscription.isoformat(),
         }
 
