@@ -37,7 +37,16 @@ app = Flask(__name__)
 CORS(app)
 
 basedir = os.path.abspath(os.path.dirname(__file__))
-app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{os.path.join(basedir, 'agromarket.db')}"
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if DATABASE_URL:
+    # Render (et Heroku) fournissent parfois "postgres://" au lieu de "postgresql://",
+    # que SQLAlchemy exige depuis ses versions récentes.
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+else:
+    # Repli local (sur ton PC, sans variable d'environnement définie) : fichier SQLite comme avant.
+    app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{os.path.join(basedir, 'agromarket.db')}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
@@ -323,6 +332,9 @@ def inscription_livreur():
         couleur_vehicule=data.get("couleur_vehicule", ""),
         piece_identite_recto=data.get("piece_identite_recto", ""),
         piece_identite_verso=data.get("piece_identite_verso", ""),
+        numero_permis_conduire=data.get("numero_permis_conduire", ""),
+        permis_conduire_recto=data.get("permis_conduire_recto", ""),
+        permis_conduire_verso=data.get("permis_conduire_verso", ""),
     )
     db.session.add(livreur)
     db.session.commit()
