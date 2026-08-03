@@ -78,6 +78,7 @@ with app.app_context():
             "ALTER TABLE membres_tontine ADD COLUMN IF NOT EXISTS numero_mobile_money VARCHAR(30)",
             "ALTER TABLE membres_tontine ADD COLUMN IF NOT EXISTS nom_complet_mobile_money VARCHAR(150)",
             "ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_url VARCHAR(255)",
+            "ALTER TABLE courses_taxi ADD COLUMN IF NOT EXISTS vehicule_souhaite VARCHAR(20) DEFAULT 'peu_importe'",
         ]
         from sqlalchemy import text as _sql_text
         with db.engine.connect() as _conn:
@@ -2808,6 +2809,7 @@ def creer_course_taxi():
         adresse_depart=data.get("adresse_depart", ""),
         latitude_arrivee=data.get("latitude_arrivee"), longitude_arrivee=data.get("longitude_arrivee"),
         adresse_arrivee=data["adresse_arrivee"], prix_propose=data.get("prix_propose"),
+        vehicule_souhaite=data.get("vehicule_souhaite", "peu_importe"),
     )
     db.session.add(course)
     db.session.commit()
@@ -2816,7 +2818,21 @@ def creer_course_taxi():
 
 @app.route("/api/courses-taxi-disponibles", methods=["GET"])
 def lister_courses_taxi_disponibles():
-    courses = CourseTaxi.query.filter_by(statut="en_attente").order_by(CourseTaxi.date_creation.desc()).all()
+    livreur_id = request.args.get("livreur_id", type=int)
+    query = CourseTaxi.query.filter_by(statut="en_attente")
+    courses = query.order_by(CourseTaxi.date_creation.desc()).all()
+
+    if livreur_id:
+        livreur = Livreur.query.get(livreur_id)
+        vehicule_livreur = (livreur.vehicule or "").strip().lower() if livreur else ""
+        courses = [
+            c for c in courses
+            if c.vehicule_souhaite == "peu_importe"
+            or not vehicule_livreur
+            or c.vehicule_souhaite.lower() in vehicule_livreur
+            or vehicule_livreur in c.vehicule_souhaite.lower()
+        ]
+
     return jsonify([c.to_dict() for c in courses])
 
 
