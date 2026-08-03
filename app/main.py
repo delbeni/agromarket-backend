@@ -74,6 +74,9 @@ with app.app_context():
             "ALTER TABLE cotisations_tontine ADD COLUMN IF NOT EXISTS commission_montant FLOAT DEFAULT 0",
             "ALTER TABLE cotisations_tontine ADD COLUMN IF NOT EXISTS montant_net FLOAT",
             "ALTER TABLE cotisations_tontine ALTER COLUMN statut SET DEFAULT 'en_attente'",
+            "ALTER TABLE membres_tontine ADD COLUMN IF NOT EXISTS operateur_mobile_money VARCHAR(30)",
+            "ALTER TABLE membres_tontine ADD COLUMN IF NOT EXISTS numero_mobile_money VARCHAR(30)",
+            "ALTER TABLE membres_tontine ADD COLUMN IF NOT EXISTS nom_complet_mobile_money VARCHAR(150)",
         ]
         from sqlalchemy import text as _sql_text
         with db.engine.connect() as _conn:
@@ -2572,6 +2575,10 @@ def creer_tontine(producteur_id):
     manquants = [c for c in champs_requis if data.get(c) is None]
     if manquants:
         return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if not data.get("numero_mobile_money"):
+        return jsonify({"erreur": "Indique le numéro Mobile Money sur lequel tu recevras le pot commun le jour de ton tour."}), 400
+    if not data.get("nom_complet_mobile_money"):
+        return jsonify({"erreur": "Indique le nom complet enregistré sur ce compte Mobile Money."}), 400
 
     tontine = Tontine(
         nom=data["nom"], createur_id=producteur_id, pays=data["pays"], ville=data["ville"],
@@ -2582,7 +2589,11 @@ def creer_tontine(producteur_id):
     db.session.flush()
 
     # le créateur rejoint automatiquement en premier
-    premier_membre = MembreTontine(tontine_id=tontine.id, producteur_id=producteur_id, ordre_tour=1)
+    premier_membre = MembreTontine(
+        tontine_id=tontine.id, producteur_id=producteur_id, ordre_tour=1,
+        operateur_mobile_money=data.get("operateur_mobile_money", ""), numero_mobile_money=data["numero_mobile_money"],
+        nom_complet_mobile_money=data["nom_complet_mobile_money"],
+    )
     db.session.add(premier_membre)
     db.session.commit()
     return jsonify({"message": "Tontine créée", "tontine": tontine.to_dict()}), 201
@@ -2619,11 +2630,19 @@ def rejoindre_tontine(tontine_id):
     producteur_id = data.get("producteur_id")
     if not producteur_id:
         return jsonify({"erreur": "producteur_id requis"}), 400
+    if not data.get("numero_mobile_money"):
+        return jsonify({"erreur": "Indique le numéro Mobile Money sur lequel tu recevras le pot commun le jour de ton tour."}), 400
+    if not data.get("nom_complet_mobile_money"):
+        return jsonify({"erreur": "Indique le nom complet enregistré sur ce compte Mobile Money."}), 400
     if any(m.producteur_id == producteur_id for m in tontine.membres):
         return jsonify({"erreur": "Tu es déjà membre de cette tontine."}), 409
 
     ordre = len(tontine.membres) + 1
-    membre = MembreTontine(tontine_id=tontine_id, producteur_id=producteur_id, ordre_tour=ordre)
+    membre = MembreTontine(
+        tontine_id=tontine_id, producteur_id=producteur_id, ordre_tour=ordre,
+        operateur_mobile_money=data.get("operateur_mobile_money", ""), numero_mobile_money=data["numero_mobile_money"],
+        nom_complet_mobile_money=data["nom_complet_mobile_money"],
+    )
     db.session.add(membre)
     if ordre == tontine.nombre_membres_max:
         tontine.statut = "en_cours"
