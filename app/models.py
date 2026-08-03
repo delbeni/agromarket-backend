@@ -1449,6 +1449,7 @@ class CourseTaxi(db.Model):
     adresse_arrivee = db.Column(db.String(255), nullable=False)
 
     prix_propose = db.Column(db.Float)  # négocié à l'avance entre client et chauffeur, comme les frais de livraison
+    vehicule_souhaite = db.Column(db.String(20), default="peu_importe")  # moto / voiture / peu_importe
     statut = db.Column(db.String(20), default="en_attente")  # en_attente / acceptee / en_cours / terminee / annulee
     date_creation = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -1462,7 +1463,7 @@ class CourseTaxi(db.Model):
             "client_nom": self.client_nom, "client_telephone": self.client_telephone,
             "latitude_depart": self.latitude_depart, "longitude_depart": self.longitude_depart, "adresse_depart": self.adresse_depart,
             "latitude_arrivee": self.latitude_arrivee, "longitude_arrivee": self.longitude_arrivee, "adresse_arrivee": self.adresse_arrivee,
-            "prix_propose": self.prix_propose, "statut": self.statut, "date_creation": self.date_creation.isoformat(),
+            "prix_propose": self.prix_propose, "vehicule_souhaite": self.vehicule_souhaite, "statut": self.statut, "date_creation": self.date_creation.isoformat(),
         }
 
 
