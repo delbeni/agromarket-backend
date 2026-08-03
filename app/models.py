@@ -1261,8 +1261,18 @@ class Tontine(db.Model):
                 return m
         return None
 
+    def membres_en_retard_cycle_actuel(self):
+        """Détecte automatiquement, sans intervention d'un admin, quels membres n'ont pas
+        encore payé leur cotisation du cycle en cours (aucune cotisation 'validee')."""
+        membres_ayant_paye = {
+            c.membre_id for c in self.cotisations
+            if c.cycle_numero == self.cycle_actuel and c.statut == "validee"
+        }
+        return [m for m in self.membres if m.id not in membres_ayant_paye]
+
     def to_dict(self):
         beneficiaire = self.beneficiaire_cycle_actuel()
+        en_retard = self.membres_en_retard_cycle_actuel()
         return {
             "id": self.id, "nom": self.nom, "createur_id": self.createur_id,
             "createur_nom": self.createur.nom if self.createur else None,
@@ -1271,6 +1281,8 @@ class Tontine(db.Model):
             "nombre_membres_max": self.nombre_membres_max, "nombre_membres_actuel": len(self.membres),
             "cycle_actuel": self.cycle_actuel, "statut": self.statut,
             "beneficiaire_cycle_actuel": beneficiaire.producteur.nom if beneficiaire and beneficiaire.producteur else None,
+            "membres_en_retard": [{"id": m.id, "nom": m.producteur.nom if m.producteur else None} for m in en_retard],
+            "nombre_a_jour": len(self.membres) - len(en_retard),
             "date_creation": self.date_creation.isoformat(),
         }
 
@@ -1296,8 +1308,10 @@ class MembreTontine(db.Model):
 
 
 class CotisationTontine(db.Model):
-    """Cotisation d'un membre pour un cycle donné. Validée manuellement par l'admin
-    (même principe que les recharges agent), en attendant un paiement en ligne actif."""
+    """Cotisation d'un membre pour un cycle donné. Payée en ligne (PayDunya) : dès que le
+    paiement est confirmé, la cotisation passe automatiquement à "validee" — aucune
+    validation manuelle par un admin n'est nécessaire. AgriChange prélève une petite
+    commission sur chaque cotisation (comme sur les commandes du marché)."""
     __tablename__ = "cotisations_tontine"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -1305,8 +1319,10 @@ class CotisationTontine(db.Model):
     membre_id = db.Column(db.Integer, db.ForeignKey("membres_tontine.id"), nullable=False)
     cycle_numero = db.Column(db.Integer, nullable=False)
     montant = db.Column(db.Float, nullable=False)
+    commission_montant = db.Column(db.Float, default=0.0)
+    montant_net = db.Column(db.Float)  # ce qui revient réellement au pot commun (montant - commission)
     reference = db.Column(db.String(120))
-    statut = db.Column(db.String(20), default="declaree")  # declaree / validee
+    statut = db.Column(db.String(20), default="en_attente")  # en_attente / validee
     date_declaration = db.Column(db.DateTime, default=datetime.utcnow)
     date_validation = db.Column(db.DateTime)
 
@@ -1316,7 +1332,9 @@ class CotisationTontine(db.Model):
         return {
             "id": self.id, "tontine_id": self.tontine_id, "membre_id": self.membre_id,
             "membre_nom": self.membre.producteur.nom if self.membre and self.membre.producteur else None,
-            "cycle_numero": self.cycle_numero, "montant": self.montant, "reference": self.reference,
+            "cycle_numero": self.cycle_numero, "montant": self.montant,
+            "commission_montant": self.commission_montant, "montant_net": self.montant_net,
+            "reference": self.reference,
             "statut": self.statut, "date_declaration": self.date_declaration.isoformat(),
         }
 
