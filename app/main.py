@@ -71,6 +71,9 @@ with app.app_context():
             "ALTER TABLE livreurs ADD COLUMN IF NOT EXISTS numero_permis_conduire VARCHAR(50)",
             "ALTER TABLE livreurs ADD COLUMN IF NOT EXISTS permis_conduire_recto VARCHAR(255)",
             "ALTER TABLE livreurs ADD COLUMN IF NOT EXISTS permis_conduire_verso VARCHAR(255)",
+            "ALTER TABLE cotisations_tontine ADD COLUMN IF NOT EXISTS commission_montant FLOAT DEFAULT 0",
+            "ALTER TABLE cotisations_tontine ADD COLUMN IF NOT EXISTS montant_net FLOAT",
+            "ALTER TABLE cotisations_tontine ALTER COLUMN statut SET DEFAULT 'en_attente'",
         ]
         from sqlalchemy import text as _sql_text
         with db.engine.connect() as _conn:
@@ -2341,6 +2344,7 @@ def paydunya_ipn_mise_en_avant():
 # ---------- ABONNEMENT VENDEUR PREMIUM (payant) ----------
 
 PRIX_ABONNEMENT_PREMIUM = 2000  # FCFA / mois, à ajuster selon ta politique de prix
+TONTINE_COMMISSION_TAUX = 0.03  # 3% prélevés automatiquement sur chaque cotisation de tontine
 
 
 @app.route("/api/producteurs/<int:producteur_id>/abonnement/initier", methods=["POST"])
@@ -2578,6 +2582,9 @@ def rejoindre_tontine(tontine_id):
 
 @app.route("/api/tontines/<int:tontine_id>/cotiser", methods=["POST"])
 def declarer_cotisation_tontine(tontine_id):
+    """Crée une facture PayDunya pour que le membre paie sa cotisation en ligne.
+    Dès que le paiement est confirmé (IPN), la cotisation est validée automatiquement —
+    aucune intervention d'un admin n'est nécessaire."""
     tontine = Tontine.query.get_or_404(tontine_id)
     data = request.get_json()
     membre_id = data.get("membre_id")
@@ -2585,24 +2592,63 @@ def declarer_cotisation_tontine(tontine_id):
         return jsonify({"erreur": "membre_id requis"}), 400
     membre = MembreTontine.query.get_or_404(membre_id)
 
+    montant = data.get("montant", tontine.montant_cotisation)
     cotisation = CotisationTontine(
         tontine_id=tontine_id, membre_id=membre_id, cycle_numero=tontine.cycle_actuel,
-        montant=data.get("montant", tontine.montant_cotisation), reference=data.get("reference", ""),
+        montant=montant, statut="en_attente",
     )
     db.session.add(cotisation)
     db.session.commit()
-    return jsonify({"message": "Cotisation déclarée, en attente de validation", "cotisation": cotisation.to_dict()}), 201
+
+    payload = {
+        "invoice": {"total_amount": int(montant), "description": f"AgriChange — Cotisation tontine « {tontine.nom} » (cycle {tontine.cycle_actuel})"},
+        "store": {"name": "AgriChange"},
+        "actions": {
+            "cancel_url": data.get("cancel_url", ""), "return_url": data.get("return_url", ""),
+            "callback_url": f"{request.url_root.rstrip('/')}/api/paiement/paydunya/ipn-cotisation-tontine",
+        },
+        "custom_data": {"cotisation_id": cotisation.id},
+    }
+    reponse, statut = paydunya_appel_api("checkout-invoice/create", payload)
+    if reponse.get("response_code") == "00":
+        return jsonify({
+            "message": "Facture créée, en attente de paiement", "cotisation": cotisation.to_dict(),
+            "url_paiement": reponse.get("response_text"), "token": reponse.get("token"),
+        }), 201
+    return jsonify({"erreur": "Échec de la création de la facture PayDunya", "detail": reponse}), 400
 
 
-@app.route("/api/admin/cotisations-tontine/<int:cotisation_id>/valider", methods=["POST"])
-def admin_valider_cotisation_tontine(cotisation_id):
-    if not cle_admin_valide(request):
-        return jsonify({"erreur": "Accès non autorisé"}), 401
-    cotisation = CotisationTontine.query.get_or_404(cotisation_id)
+@app.route("/api/paiement/paydunya/ipn-cotisation-tontine", methods=["POST"])
+def paydunya_ipn_cotisation_tontine():
+    """IPN dédié aux cotisations de tontine : valide automatiquement la cotisation dès
+    que le paiement est confirmé, et prélève la commission AgriChange sur le montant."""
+    donnees_recues = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
+    token = donnees_recues.get("data[token]") or donnees_recues.get("token")
+    if not token:
+        return jsonify({"erreur": "Token manquant"}), 400
+
+    verification = paydunya_verifier_facture(token)
+    if verification.get("status") != "completed":
+        return jsonify({"message": "Paiement non confirmé, aucune action effectuée."}), 200
+
+    custom_data = verification.get("custom_data", {})
+    cotisation = CotisationTontine.query.get(custom_data.get("cotisation_id"))
+    if not cotisation:
+        return jsonify({"erreur": "Cotisation introuvable"}), 404
+
+    cotisation.commission_montant = round(cotisation.montant * TONTINE_COMMISSION_TAUX, 2)
+    cotisation.montant_net = round(cotisation.montant - cotisation.commission_montant, 2)
     cotisation.statut = "validee"
     cotisation.date_validation = datetime.utcnow()
     db.session.commit()
-    return jsonify({"message": "Cotisation validée", "cotisation": cotisation.to_dict()})
+
+    if cotisation.membre and cotisation.membre.tontine and cotisation.membre.tontine.createur:
+        envoyer_notification_push(
+            cotisation.membre.tontine.createur.push_token, "Cotisation reçue",
+            f"{cotisation.membre.producteur.nom if cotisation.membre.producteur else 'Un membre'} a payé sa cotisation pour « {cotisation.membre.tontine.nom} ».",
+        )
+
+    return jsonify({"message": "Cotisation validée automatiquement"}), 200
 
 
 @app.route("/api/tontines/<int:tontine_id>/cycle-suivant", methods=["POST"])
