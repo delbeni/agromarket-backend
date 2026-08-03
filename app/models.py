@@ -168,6 +168,82 @@ class HistoriquePrix(db.Model):
         return {"prix": self.prix, "date": self.date.isoformat()}
 
 
+class LotTracabilite(db.Model):
+    """Lot d'un produit suivi par QR code, de la collecte chez le producteur jusqu'à la réception
+    par l'acheteur final (traçabilité anti-fraude, gage de confiance pour l'export)."""
+    __tablename__ = "lots_tracabilite"
+
+    id = db.Column(db.Integer, primary_key=True)
+    code_lot = db.Column(db.String(30), unique=True, nullable=False)
+    producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
+    produit_id = db.Column(db.Integer, db.ForeignKey("produits.id"), nullable=True)
+
+    nom_produit = db.Column(db.String(150), nullable=False)
+    quantite = db.Column(db.Float, nullable=False)
+    unite = db.Column(db.String(20), default="kg")
+    origine_ville = db.Column(db.String(100))
+    origine_pays = db.Column(db.String(50))
+    date_recolte = db.Column(db.Date)
+    description = db.Column(db.Text)
+
+    nombre_scans = db.Column(db.Integer, default=0)
+    date_creation = db.Column(db.DateTime, default=datetime.utcnow)
+
+    producteur = db.relationship("Producteur")
+    etapes = db.relationship("EtapeTracabilite", backref="lot", lazy=True, order_by="EtapeTracabilite.date_etape")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "code_lot": self.code_lot,
+            "producteur_id": self.producteur_id,
+            "producteur_nom": self.producteur.nom if self.producteur else None,
+            "producteur_verifie": self.producteur.verifie if self.producteur else False,
+            "produit_id": self.produit_id,
+            "nom_produit": self.nom_produit,
+            "quantite": self.quantite,
+            "unite": self.unite,
+            "origine_ville": self.origine_ville,
+            "origine_pays": self.origine_pays,
+            "date_recolte": self.date_recolte.isoformat() if self.date_recolte else None,
+            "description": self.description,
+            "nombre_scans": self.nombre_scans,
+            "nombre_etapes": len(self.etapes),
+            "derniere_etape": self.etapes[-1].type_etape if self.etapes else None,
+            "date_creation": self.date_creation.isoformat(),
+        }
+
+
+class EtapeTracabilite(db.Model):
+    """Une étape scannée dans le parcours d'un lot (collecte, entrepôt, transport, réception)."""
+    __tablename__ = "etapes_tracabilite"
+
+    TYPES_VALIDES = ["collecte", "entrepot", "transport", "reception"]
+
+    id = db.Column(db.Integer, primary_key=True)
+    lot_id = db.Column(db.Integer, db.ForeignKey("lots_tracabilite.id"), nullable=False)
+    type_etape = db.Column(db.String(20), nullable=False)
+    agent_nom = db.Column(db.String(120))
+    agent_telephone = db.Column(db.String(30))
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+    details = db.Column(db.Text)
+    date_etape = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "lot_id": self.lot_id,
+            "type_etape": self.type_etape,
+            "agent_nom": self.agent_nom,
+            "agent_telephone": self.agent_telephone,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "details": self.details,
+            "date_etape": self.date_etape.isoformat(),
+        }
+
+
 class RecolteFuture(db.Model):
     """Annonce d'une récolte pas encore disponible, que les acheteurs peuvent réserver à l'avance."""
     __tablename__ = "recoltes_futures"
@@ -499,7 +575,9 @@ class Livreur(db.Model):
     piece_identite_recto = db.Column(db.String(255))
     piece_identite_verso = db.Column(db.String(255))
 
-    en_service = db.Column(db.Boolean, default=False)
+    numero_permis_conduire = db.Column(db.String(50))
+    permis_conduire_recto = db.Column(db.String(255))
+    permis_conduire_verso = db.Column(db.String(255))
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
     position_maj = db.Column(db.DateTime)
@@ -524,6 +602,9 @@ class Livreur(db.Model):
             "couleur_vehicule": self.couleur_vehicule,
             "piece_identite_recto": self.piece_identite_recto,
             "piece_identite_verso": self.piece_identite_verso,
+            "numero_permis_conduire": self.numero_permis_conduire,
+            "permis_conduire_recto": self.permis_conduire_recto,
+            "permis_conduire_verso": self.permis_conduire_verso,
             "en_service": self.en_service,
             "latitude": self.latitude,
             "longitude": self.longitude,
