@@ -326,6 +326,49 @@ def consommer_credit(producteur_id):
     }), 403
 
 
+@app.route("/api/traduire-message", methods=["POST"])
+def traduire_message():
+    """Traduit un message de chat à la demande, dans la langue choisie par le lecteur."""
+    if not ANTHROPIC_API_KEY:
+        return jsonify({"erreur": "La traduction n'est pas encore configurée sur le serveur."}), 503
+
+    data = request.get_json()
+    texte = (data.get("texte") or "").strip()
+    langue_cible = (data.get("langue_cible") or "fr").strip()
+    noms_langues = {"fr": "français", "en": "anglais", "pt": "portugais", "zh": "chinois (mandarin)"}
+    if not texte:
+        return jsonify({"erreur": "Le texte à traduire est requis"}), 400
+
+    consigne = (
+        f"Traduis ce message en {noms_langues.get(langue_cible, 'français')}, sans rien ajouter ni expliquer, "
+        f"juste la traduction directe, en gardant le ton naturel d'une conversation :\n\n« {texte} »"
+    )
+    payload = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 300,
+        "messages": [{"role": "user", "content": consigne}],
+    }
+    try:
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=20) as res:
+            reponse = json.loads(res.read().decode("utf-8"))
+        traduction = "".join(bloc.get("text", "") for bloc in reponse.get("content", []) if bloc.get("type") == "text")
+        if not traduction.strip():
+            return jsonify({"erreur": "Traduction vide, réessaie."}), 500
+        return jsonify({"texte_traduit": traduction.strip()})
+    except Exception:
+        return jsonify({"erreur": "Impossible de traduire pour le moment. Réessaie."}), 500
+
+
 @app.route("/api/aide-ia-texte", methods=["POST"])
 def aide_ia_texte():
     """Améliore/réécrit un texte déjà rédigé par l'utilisateur (description produit, histoire,
