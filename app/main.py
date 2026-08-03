@@ -640,6 +640,8 @@ def lister_produits():
         if ville and p.producteur.ville != ville:
             continue
         resultats.append(p.to_dict())
+    # Les produits avec une mise en avant active passent en premier
+    resultats.sort(key=lambda d: not d["mis_en_avant_actif"])
     return jsonify(resultats)
 
 
@@ -2184,6 +2186,9 @@ def paydunya_ipn():
     if hasattr(objet, "statut"):
         if type_commande == "commande":
             objet.statut = "confirmee_producteur"
+            # Escrow : l'argent est payé mais reste bloqué tant que l'acheteur n'a pas confirmé la réception.
+            objet.paiement_statut = "paye_bloque"
+            objet.date_paiement = datetime.utcnow()
         elif type_commande == "commande_nourriture":
             objet.statut = "en_preparation"
         elif type_commande == "reservation_hotel":
@@ -2191,6 +2196,172 @@ def paydunya_ipn():
     db.session.commit()
 
     return jsonify({"message": "Paiement confirmé et commande mise à jour"}), 200
+
+
+@app.route("/api/commandes/<int:commande_id>/confirmer-reception", methods=["PUT"])
+def confirmer_reception_commande(commande_id):
+    """L'acheteur confirme avoir bien reçu son produit : le paiement bloqué (escrow) est alors
+    libéré, ce qui signifie qu'il est officiellement dû au producteur (le vrai virement reste
+    manuel tant que le paiement automatique vers les producteurs n'est pas actif)."""
+    commande = Commande.query.get_or_404(commande_id)
+    if commande.paiement_statut != "paye_bloque":
+        return jsonify({"erreur": "Aucun paiement en attente de libération pour cette commande."}), 400
+
+    commande.paiement_statut = "libere"
+    commande.date_liberation_paiement = datetime.utcnow()
+    commande.statut = "terminee"
+    db.session.commit()
+
+    if commande.produit and commande.produit.producteur:
+        envoyer_notification_push(
+            commande.produit.producteur.push_token, "Paiement libéré",
+            f"L'acheteur a confirmé la réception de « {commande.produit.nom} ». "
+            f"{commande.montant_producteur} FCFA te sont dus, versement à venir.",
+        )
+
+    return jsonify({"message": "Réception confirmée, paiement libéré", "commande": commande.to_dict()})
+
+
+@app.route("/api/admin/paiements-bloques", methods=["GET"])
+def admin_lister_paiements_bloques():
+    """Liste des commandes payées mais dont l'argent reste bloqué (escrow), pour suivi admin."""
+    if not cle_admin_valide(request):
+        return jsonify({"erreur": "Accès non autorisé"}), 401
+    commandes = Commande.query.filter_by(paiement_statut="paye_bloque").order_by(Commande.date_paiement.desc()).all()
+    return jsonify([c.to_dict() for c in commandes])
+
+
+@app.route("/api/commandes/<int:commande_id>/suivi-transporteur", methods=["PUT"])
+def enregistrer_suivi_transporteur(commande_id):
+    """Le producteur (ou l'admin) enregistre le numéro de suivi d'un transporteur externe
+    (DHL, FedEx, La Poste...) pour une commande d'export international. AgriChange n'interroge
+    pas leur API en direct (coûteux, réservé aux comptes professionnels) : le client reçoit
+    juste le numéro et le nom du transporteur pour vérifier lui-même sur leur site."""
+    commande = Commande.query.get_or_404(commande_id)
+    data = request.get_json()
+    if not data.get("transporteur_externe") or not data.get("numero_suivi_externe"):
+        return jsonify({"erreur": "transporteur_externe et numero_suivi_externe requis"}), 400
+    commande.transporteur_externe = data["transporteur_externe"]
+    commande.numero_suivi_externe = data["numero_suivi_externe"]
+    db.session.commit()
+    if commande.acheteur:
+        envoyer_notification_push(
+            commande.acheteur.push_token, "Numéro de suivi disponible",
+            f"Ta commande a été confiée à {data['transporteur_externe']}, numéro : {data['numero_suivi_externe']}.",
+        )
+    return jsonify({"message": "Numéro de suivi enregistré", "commande": commande.to_dict()})
+
+
+# ---------- MISE EN AVANT DES ANNONCES (payant) ----------
+
+DUREE_MISE_EN_AVANT_JOURS = {"7_jours": 7, "30_jours": 30}
+PRIX_MISE_EN_AVANT = {"7_jours": 1000, "30_jours": 3000}  # FCFA, à ajuster selon ta politique de prix
+
+
+@app.route("/api/produits/<int:produit_id>/mise-en-avant/initier", methods=["POST"])
+def initier_mise_en_avant(produit_id):
+    """Crée une facture PayDunya pour booster un produit (mise en avant payante)."""
+    produit = Produit.query.get_or_404(produit_id)
+    data = request.get_json()
+    duree = data.get("duree", "7_jours")
+    if duree not in DUREE_MISE_EN_AVANT_JOURS:
+        return jsonify({"erreur": f"duree invalide. Options: {', '.join(DUREE_MISE_EN_AVANT_JOURS.keys())}"}), 400
+
+    montant = PRIX_MISE_EN_AVANT[duree]
+    payload = {
+        "invoice": {"total_amount": montant, "description": f"AgriChange — Mise en avant produit #{produit_id} ({duree})"},
+        "store": {"name": "AgriChange"},
+        "actions": {
+            "cancel_url": data.get("cancel_url", ""), "return_url": data.get("return_url", ""),
+            "callback_url": f"{request.url_root.rstrip('/')}/api/paiement/paydunya/ipn-mise-en-avant",
+        },
+        "custom_data": {"produit_id": produit_id, "duree": duree},
+    }
+    reponse, statut = paydunya_appel_api("checkout-invoice/create", payload)
+    if reponse.get("response_code") == "00":
+        return jsonify({"message": "Facture créée", "url_paiement": reponse.get("response_text"), "token": reponse.get("token")}), 201
+    return jsonify({"erreur": "Échec de la création de la facture PayDunya", "detail": reponse}), 400
+
+
+@app.route("/api/paiement/paydunya/ipn-mise-en-avant", methods=["POST"])
+def paydunya_ipn_mise_en_avant():
+    """IPN dédié à la mise en avant de produit : active le boost après paiement confirmé."""
+    donnees_recues = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
+    token = donnees_recues.get("data[token]") or donnees_recues.get("token")
+    if not token:
+        return jsonify({"erreur": "Token manquant"}), 400
+
+    verification = paydunya_verifier_facture(token)
+    if verification.get("status") != "completed":
+        return jsonify({"message": "Paiement non confirmé, aucune action effectuée."}), 200
+
+    custom_data = verification.get("custom_data", {})
+    produit_id = custom_data.get("produit_id")
+    duree = custom_data.get("duree", "7_jours")
+    produit = Produit.query.get(produit_id)
+    if not produit:
+        return jsonify({"erreur": "Produit introuvable"}), 404
+
+    jours = DUREE_MISE_EN_AVANT_JOURS.get(duree, 7)
+    from datetime import timedelta
+    base = produit.mise_en_avant_expire if (produit.mise_en_avant_expire and produit.mise_en_avant_expire > datetime.utcnow()) else datetime.utcnow()
+    produit.mis_en_avant = True
+    produit.mise_en_avant_expire = base + timedelta(days=jours)
+    db.session.commit()
+
+    return jsonify({"message": "Mise en avant activée"}), 200
+
+
+# ---------- ABONNEMENT VENDEUR PREMIUM (payant) ----------
+
+PRIX_ABONNEMENT_PREMIUM = 2000  # FCFA / mois, à ajuster selon ta politique de prix
+
+
+@app.route("/api/producteurs/<int:producteur_id>/abonnement/initier", methods=["POST"])
+def initier_abonnement_premium(producteur_id):
+    """Crée une facture PayDunya pour un abonnement premium producteur (1 mois)."""
+    Producteur.query.get_or_404(producteur_id)
+    data = request.get_json() or {}
+    payload = {
+        "invoice": {"total_amount": PRIX_ABONNEMENT_PREMIUM, "description": f"AgriChange — Abonnement premium producteur #{producteur_id} (1 mois)"},
+        "store": {"name": "AgriChange"},
+        "actions": {
+            "cancel_url": data.get("cancel_url", ""), "return_url": data.get("return_url", ""),
+            "callback_url": f"{request.url_root.rstrip('/')}/api/paiement/paydunya/ipn-abonnement",
+        },
+        "custom_data": {"producteur_id": producteur_id},
+    }
+    reponse, statut = paydunya_appel_api("checkout-invoice/create", payload)
+    if reponse.get("response_code") == "00":
+        return jsonify({"message": "Facture créée", "url_paiement": reponse.get("response_text"), "token": reponse.get("token")}), 201
+    return jsonify({"erreur": "Échec de la création de la facture PayDunya", "detail": reponse}), 400
+
+
+@app.route("/api/paiement/paydunya/ipn-abonnement", methods=["POST"])
+def paydunya_ipn_abonnement():
+    """IPN dédié à l'abonnement premium : active/prolonge le premium après paiement confirmé."""
+    donnees_recues = request.form.to_dict() if request.form else (request.get_json(silent=True) or {})
+    token = donnees_recues.get("data[token]") or donnees_recues.get("token")
+    if not token:
+        return jsonify({"erreur": "Token manquant"}), 400
+
+    verification = paydunya_verifier_facture(token)
+    if verification.get("status") != "completed":
+        return jsonify({"message": "Paiement non confirmé, aucune action effectuée."}), 200
+
+    custom_data = verification.get("custom_data", {})
+    producteur_id = custom_data.get("producteur_id")
+    producteur = Producteur.query.get(producteur_id)
+    if not producteur:
+        return jsonify({"erreur": "Producteur introuvable"}), 404
+
+    from datetime import timedelta
+    base = producteur.premium_expire if (producteur.premium_expire and producteur.premium_expire > datetime.utcnow()) else datetime.utcnow()
+    producteur.premium = True
+    producteur.premium_expire = base + timedelta(days=30)
+    db.session.commit()
+
+    return jsonify({"message": "Abonnement premium activé"}), 200
 
 
 @app.route("/api/producteurs/<int:producteur_id>/offres-troc", methods=["POST"])
