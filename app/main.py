@@ -77,6 +77,7 @@ with app.app_context():
             "ALTER TABLE membres_tontine ADD COLUMN IF NOT EXISTS operateur_mobile_money VARCHAR(30)",
             "ALTER TABLE membres_tontine ADD COLUMN IF NOT EXISTS numero_mobile_money VARCHAR(30)",
             "ALTER TABLE membres_tontine ADD COLUMN IF NOT EXISTS nom_complet_mobile_money VARCHAR(150)",
+            "ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_url VARCHAR(255)",
         ]
         from sqlalchemy import text as _sql_text
         with db.engine.connect() as _conn:
@@ -322,6 +323,54 @@ def consommer_credit(producteur_id):
         "autorise": False,
         "erreur": "Tu as utilisé tous tes crédits gratuits ce mois-ci. Contacte le support pour la version premium.",
     }), 403
+
+
+@app.route("/api/aide-ia-texte", methods=["POST"])
+def aide_ia_texte():
+    """Améliore/réécrit un texte déjà rédigé par l'utilisateur (description produit, histoire,
+    annonce d'emploi, description de terrain...). Réutilisable partout dans l'app."""
+    if not ANTHROPIC_API_KEY:
+        return jsonify({"erreur": "Le générateur IA n'est pas encore configuré sur le serveur."}), 503
+
+    data = request.get_json()
+    texte = (data.get("texte") or "").strip()
+    contexte = (data.get("contexte") or "un texte pour une application agricole africaine").strip()
+    if not texte:
+        return jsonify({"erreur": "Le texte à améliorer est requis"}), 400
+
+    consigne = (
+        f"Voici {contexte}, écrit par un utilisateur d'AgriChange (marché agricole africain) :\n\n"
+        f"« {texte} »\n\n"
+        "Réécris-le en français correct, clair et bien organisé, en gardant toutes les informations "
+        "d'origine et le même sens. Corrige l'orthographe et la grammaire, améliore la fluidité, "
+        "mais reste concis (ne rallonge pas inutilement). Réponds uniquement avec le texte amélioré, "
+        "sans aucun préambule ni guillemets."
+    )
+
+    payload = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 400,
+        "messages": [{"role": "user", "content": consigne}],
+    }
+    try:
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=25) as res:
+            reponse = json.loads(res.read().decode("utf-8"))
+        texte_arrange = "".join(bloc.get("text", "") for bloc in reponse.get("content", []) if bloc.get("type") == "text")
+        if not texte_arrange.strip():
+            return jsonify({"erreur": "Réponse vide de l'IA, réessaie."}), 500
+        return jsonify({"texte": texte_arrange.strip()})
+    except Exception:
+        return jsonify({"erreur": "Impossible d'améliorer le texte pour le moment. Réessaie dans un instant."}), 500
 
 
 @app.route("/api/generateur-annonce-ia", methods=["POST"])
@@ -2025,23 +2074,35 @@ def confirmer_retour_colis(commande_id):
 @app.route("/api/messages", methods=["POST"])
 def envoyer_message():
     data = request.get_json()
-    champs_requis = ["acheteur_id", "producteur_id", "expediteur_type", "contenu"]
+    champs_requis = ["acheteur_id", "producteur_id", "expediteur_type"]
     manquants = [c for c in champs_requis if not data.get(c)]
     if manquants:
         return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+    if not data.get("contenu") and not data.get("audio_url"):
+        return jsonify({"erreur": "contenu ou audio_url requis"}), 400
     if data["expediteur_type"] not in ("acheteur", "producteur"):
         return jsonify({"erreur": "expediteur_type doit être 'acheteur' ou 'producteur'"}), 400
     acheteur = Acheteur.query.get_or_404(data["acheteur_id"])
     producteur = Producteur.query.get_or_404(data["producteur_id"])
-    contenu_filtre, contient_infraction = filtrer_message(data["contenu"])
+
+    audio_url = data.get("audio_url", "")
+    if audio_url:
+        # Message vocal : pas de filtrage de texte à appliquer (rien à masquer dans un fichier audio).
+        contenu_original = "[Message vocal]"
+        contenu_filtre = "[Message vocal]"
+        contient_infraction = False
+    else:
+        contenu_filtre, contient_infraction = filtrer_message(data["contenu"])
+        contenu_original = data["contenu"]
+
     message = Message(
         acheteur_id=data["acheteur_id"], producteur_id=data["producteur_id"], produit_id=data.get("produit_id"),
-        expediteur_type=data["expediteur_type"], contenu_original=data["contenu"],
-        contenu_filtre=contenu_filtre, contient_infraction=contient_infraction,
+        expediteur_type=data["expediteur_type"], contenu_original=contenu_original,
+        contenu_filtre=contenu_filtre, contient_infraction=contient_infraction, audio_url=audio_url,
     )
     db.session.add(message)
     db.session.commit()
-    apercu = contenu_filtre[:80]
+    apercu = "🎤 Message vocal" if audio_url else contenu_filtre[:80]
     if data["expediteur_type"] == "acheteur":
         envoyer_notification_push(producteur.push_token, f"Message de {acheteur.nom}", apercu)
     else:
@@ -2110,7 +2171,7 @@ def admin_reinitialiser_credits(producteur_id):
     if not cle_admin_valide(request):
         return jsonify({"erreur": "Accès non autorisé"}), 401
     producteur = Producteur.query.get_or_404(producteur_id)
-    producteur.credits_outils = int(request.get_json().get("credits", 10))
+    producteur.credits_outils = int(request.get_json().get("credits", 5))
     db.session.commit()
     return jsonify({"message": "Crédits mis à jour", "producteur": producteur.to_dict()})
 
