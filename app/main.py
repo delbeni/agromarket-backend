@@ -365,8 +365,8 @@ def traduire_message():
         if not traduction.strip():
             return jsonify({"erreur": "Traduction vide, réessaie."}), 500
         return jsonify({"texte_traduit": traduction.strip()})
-    except Exception:
-        return jsonify({"erreur": "Impossible de traduire pour le moment. Réessaie."}), 500
+    except Exception as e:
+        return jsonify({"erreur": f"[DEBUG TEMPORAIRE] {type(e).__name__}: {str(e)}"}), 500
 
 
 @app.route("/api/aide-ia-texte", methods=["POST"])
