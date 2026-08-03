@@ -40,7 +40,7 @@ class Producteur(db.Model):
 
     premium = db.Column(db.Boolean, default=False)
     premium_expire = db.Column(db.DateTime)
-    credits_outils = db.Column(db.Integer, default=10)
+    credits_outils = db.Column(db.Integer, default=5)
 
     actif = db.Column(db.Boolean, default=True)
     date_inscription = db.Column(db.DateTime, default=datetime.utcnow)
@@ -635,6 +635,7 @@ class Message(db.Model):
     contenu_original = db.Column(db.Text, nullable=False)
     contenu_filtre = db.Column(db.Text, nullable=False)
     contient_infraction = db.Column(db.Boolean, default=False)
+    audio_url = db.Column(db.String(255))  # message vocal (optionnel) : URL Cloudinary de l'enregistrement
 
     date_envoi = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -646,6 +647,7 @@ class Message(db.Model):
             "produit_id": self.produit_id,
             "expediteur_type": self.expediteur_type,
             "contenu": self.contenu_filtre,
+            "audio_url": self.audio_url,
             "contient_infraction": self.contient_infraction,
             "date_envoi": self.date_envoi.isoformat(),
         }
