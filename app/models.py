@@ -1281,6 +1281,9 @@ class Tontine(db.Model):
             "nombre_membres_max": self.nombre_membres_max, "nombre_membres_actuel": len(self.membres),
             "cycle_actuel": self.cycle_actuel, "statut": self.statut,
             "beneficiaire_cycle_actuel": beneficiaire.producteur.nom if beneficiaire and beneficiaire.producteur else None,
+            "beneficiaire_operateur_mobile_money": beneficiaire.operateur_mobile_money if beneficiaire else None,
+            "beneficiaire_numero_mobile_money": beneficiaire.numero_mobile_money if beneficiaire else None,
+            "beneficiaire_nom_complet_mobile_money": beneficiaire.nom_complet_mobile_money if beneficiaire else None,
             "membres_en_retard": [{"id": m.id, "nom": m.producteur.nom if m.producteur else None} for m in en_retard],
             "nombre_a_jour": len(self.membres) - len(en_retard),
             "date_creation": self.date_creation.isoformat(),
@@ -1294,6 +1297,14 @@ class MembreTontine(db.Model):
     tontine_id = db.Column(db.Integer, db.ForeignKey("tontines.id"), nullable=False)
     producteur_id = db.Column(db.Integer, db.ForeignKey("producteurs.id"), nullable=False)
     ordre_tour = db.Column(db.Integer, nullable=False)  # position dans la rotation (1, 2, 3...)
+
+    # Numéro sur lequel ce membre doit recevoir le pot commun le jour de son tour.
+    # Le nom complet est celui enregistré SUR le compte Mobile Money (peut différer du nom
+    # du compte AgriChange) : indispensable pour que le virement ne soit pas refusé/mal dirigé.
+    nom_complet_mobile_money = db.Column(db.String(150))
+    operateur_mobile_money = db.Column(db.String(30))
+    numero_mobile_money = db.Column(db.String(30))
+
     date_adhesion = db.Column(db.DateTime, default=datetime.utcnow)
 
     producteur = db.relationship("Producteur", backref="tontines_rejointes")
@@ -1303,6 +1314,8 @@ class MembreTontine(db.Model):
             "id": self.id, "tontine_id": self.tontine_id,
             "producteur_id": self.producteur_id, "producteur_nom": self.producteur.nom if self.producteur else None,
             "producteur_telephone": self.producteur.telephone if self.producteur else None,
+            "operateur_mobile_money": self.operateur_mobile_money, "numero_mobile_money": self.numero_mobile_money,
+            "nom_complet_mobile_money": self.nom_complet_mobile_money,
             "ordre_tour": self.ordre_tour, "date_adhesion": self.date_adhesion.isoformat(),
         }
 
