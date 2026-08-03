@@ -102,6 +102,7 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "agromarket_admin_2026")
 # IMPORTANT : déplace AT_API_KEY vers une variable d'environnement sur Render
 # dès que possible, pour ne pas garder la clé en clair dans le code.
 AT_USERNAME = os.environ.get("AT_USERNAME", "sandbox")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AT_API_KEY = os.environ.get("AT_API_KEY", "atsk_42cb47be1ad9ad1f1965f0fc6c9805ebc978840594879d9c0a36e98dd1b0440d66a93950")
 
 INDICATIFS_PAYS = {
@@ -318,6 +319,56 @@ def consommer_credit(producteur_id):
         "autorise": False,
         "erreur": "Tu as utilisé tous tes crédits gratuits ce mois-ci. Contacte le support pour la version premium.",
     }), 403
+
+
+@app.route("/api/generateur-annonce-ia", methods=["POST"])
+def generer_annonce_ia():
+    """Génère un vrai texte d'annonce publicitaire via l'IA Claude (Anthropic).
+    L'appel à cette route suppose que le crédit du producteur a déjà été vérifié/consommé
+    côté app (même logique que le calculateur), donc pas de nouvelle vérification ici."""
+    if not ANTHROPIC_API_KEY:
+        return jsonify({"erreur": "Le générateur IA n'est pas encore configuré sur le serveur."}), 503
+
+    data = request.get_json()
+    produit = (data.get("produit") or "").strip()
+    lieu = (data.get("lieu") or "").strip()
+    details = (data.get("details") or "").strip()
+    if not produit:
+        return jsonify({"erreur": "Le nom du produit est requis"}), 400
+
+    consigne = (
+        "Écris une annonce de vente courte, chaleureuse et convaincante en français, pour un marché agricole "
+        "africain en ligne (AgriChange). Maximum 4 phrases, ton direct et accessible, avec 1 à 2 emojis pertinents. "
+        "Réponds uniquement avec le texte de l'annonce, sans aucun préambule ni guillemets.\n\n"
+        f"Produit : {produit}\n"
+        + (f"Lieu : {lieu}\n" if lieu else "")
+        + (f"Détails : {details}\n" if details else "")
+    )
+
+    payload = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 300,
+        "messages": [{"role": "user", "content": consigne}],
+    }
+    try:
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=25) as res:
+            reponse = json.loads(res.read().decode("utf-8"))
+        texte = "".join(bloc.get("text", "") for bloc in reponse.get("content", []) if bloc.get("type") == "text")
+        if not texte.strip():
+            return jsonify({"erreur": "Réponse vide de l'IA, réessaie."}), 500
+        return jsonify({"texte": texte.strip()})
+    except Exception:
+        return jsonify({"erreur": "Impossible de générer l'annonce pour le moment. Réessaie dans un instant."}), 500
 
 
 @app.route("/api/producteurs/<int:producteur_id>/utiliser-code-premium", methods=["POST"])
