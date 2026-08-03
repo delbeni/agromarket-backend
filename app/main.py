@@ -55,6 +55,32 @@ db.init_app(app)
 with app.app_context():
     db.create_all()
 
+    # "Mini-migration" automatique : ajoute les colonnes créées après le premier lancement
+    # de la base (db.create_all() ne modifie jamais les tables déjà existantes).
+    # Sans danger : ADD COLUMN IF NOT EXISTS ne touche à rien si la colonne existe déjà.
+    if DATABASE_URL:
+        colonnes_a_ajouter = [
+            "ALTER TABLE produits ADD COLUMN IF NOT EXISTS mis_en_avant BOOLEAN DEFAULT false",
+            "ALTER TABLE produits ADD COLUMN IF NOT EXISTS mise_en_avant_expire TIMESTAMP",
+            "ALTER TABLE producteurs ADD COLUMN IF NOT EXISTS premium_expire TIMESTAMP",
+            "ALTER TABLE commandes ADD COLUMN IF NOT EXISTS paiement_statut VARCHAR(20) DEFAULT 'non_paye'",
+            "ALTER TABLE commandes ADD COLUMN IF NOT EXISTS date_paiement TIMESTAMP",
+            "ALTER TABLE commandes ADD COLUMN IF NOT EXISTS date_liberation_paiement TIMESTAMP",
+            "ALTER TABLE commandes ADD COLUMN IF NOT EXISTS transporteur_externe VARCHAR(50)",
+            "ALTER TABLE commandes ADD COLUMN IF NOT EXISTS numero_suivi_externe VARCHAR(100)",
+            "ALTER TABLE livreurs ADD COLUMN IF NOT EXISTS numero_permis_conduire VARCHAR(50)",
+            "ALTER TABLE livreurs ADD COLUMN IF NOT EXISTS permis_conduire_recto VARCHAR(255)",
+            "ALTER TABLE livreurs ADD COLUMN IF NOT EXISTS permis_conduire_verso VARCHAR(255)",
+        ]
+        from sqlalchemy import text as _sql_text
+        with db.engine.connect() as _conn:
+            for _stmt in colonnes_a_ajouter:
+                try:
+                    _conn.execute(_sql_text(_stmt))
+                    _conn.commit()
+                except Exception:
+                    _conn.rollback()
+
 PAYS_AUTORISES = ["Côte d'Ivoire", "Mali", "Burkina Faso", "Sénégal", "Cameroun", "Togo", "Bénin", "Niger", "RDC", "Guinée"]
 CATEGORIES = ["cereales", "elevage", "maraichage", "transforme", "restaurant", "autre"]
 STATUTS_COMMANDE = ["en_attente", "confirmee_producteur", "livree", "terminee", "annulee"]
