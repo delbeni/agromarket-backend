@@ -39,6 +39,7 @@ class Producteur(db.Model):
     push_token = db.Column(db.String(255))
 
     premium = db.Column(db.Boolean, default=False)
+    premium_expire = db.Column(db.DateTime)
     credits_outils = db.Column(db.Integer, default=10)
 
     actif = db.Column(db.Boolean, default=True)
@@ -84,6 +85,7 @@ class Producteur(db.Model):
             "code_parrainage": self.code_parrainage,
             "nombre_filleuls": self.nombre_filleuls,
             "premium": self.premium,
+            "premium_expire": self.premium_expire.isoformat() if self.premium_expire else None,
             "credits_outils": self.credits_outils,
             "actif": self.actif,
             "date_inscription": self.date_inscription.isoformat(),
@@ -113,6 +115,9 @@ class Produit(db.Model):
     description = db.Column(db.Text)
 
     disponible_export = db.Column(db.Boolean, default=False)  # signalé par le producteur pour l'export international
+
+    mis_en_avant = db.Column(db.Boolean, default=False)
+    mise_en_avant_expire = db.Column(db.DateTime)
 
     actif = db.Column(db.Boolean, default=True)
     date_ajout = db.Column(db.DateTime, default=datetime.utcnow)
@@ -151,6 +156,8 @@ class Produit(db.Model):
             "video_url": self.video_url,
             "description": self.description,
             "disponible_export": self.disponible_export,
+            "mis_en_avant_actif": bool(self.mis_en_avant and self.mise_en_avant_expire and self.mise_en_avant_expire > datetime.utcnow()),
+            "mise_en_avant_expire": self.mise_en_avant_expire.isoformat() if self.mise_en_avant_expire else None,
             "actif": self.actif,
         }
 
@@ -1614,6 +1621,19 @@ class Commande(db.Model):
 
     statut = db.Column(db.String(30), default="en_attente")
 
+    # Escrow : l'argent payé en ligne (PayDunya) reste "bloqué" tant que l'acheteur n'a pas
+    # confirmé la bonne réception. Ce n'est qu'après cette confirmation que le montant est
+    # considéré comme dû au producteur (le vrai virement reste, pour l'instant, manuel).
+    paiement_statut = db.Column(db.String(20), default="non_paye")  # non_paye / paye_bloque / libere / rembourse
+    date_paiement = db.Column(db.DateTime)
+    date_liberation_paiement = db.Column(db.DateTime)
+
+    # Suivi transporteur externe (export international uniquement, ex: DHL/FedEx).
+    # AgriChange n'interroge pas automatiquement leur API (coûteux et réservé à l'export formel) :
+    # on stocke juste le numéro pour permettre au client de vérifier lui-même sur le site du transporteur.
+    transporteur_externe = db.Column(db.String(50))
+    numero_suivi_externe = db.Column(db.String(100))
+
     latitude_livraison = db.Column(db.Float)
     longitude_livraison = db.Column(db.Float)
 
@@ -1662,5 +1682,10 @@ class Commande(db.Model):
             "longitude_livreur": self.longitude_livreur,
             "position_livreur_maj": self.position_livreur_maj.isoformat() if self.position_livreur_maj else None,
             "reference_paiement": self.reference_paiement,
+            "paiement_statut": self.paiement_statut,
+            "date_paiement": self.date_paiement.isoformat() if self.date_paiement else None,
+            "date_liberation_paiement": self.date_liberation_paiement.isoformat() if self.date_liberation_paiement else None,
+            "transporteur_externe": self.transporteur_externe,
+            "numero_suivi_externe": self.numero_suivi_externe,
             "date_commande": self.date_commande.isoformat(),
         }
