@@ -13,6 +13,7 @@ from models import (
     CourseTaxi,
     TrajetPoint, RecolteFuture, ReservationRecolte, Cooperative, MembreCooperative, Invendu, Signalement,
     NumeroMobileMoney,
+    LotTracabilite, EtapeTracabilite,
 )
 import os
 import re
@@ -882,6 +883,107 @@ def cloturer_recolte_future(recolte_id):
     recolte.statut = "clos"
     db.session.commit()
     return jsonify({"message": "Récolte future clôturée", "recolte": recolte.to_dict()})
+
+
+# ---------- TRAÇABILITÉ PAR QR CODE (lots de production) ----------
+
+def generer_code_lot(nom_produit):
+    prefixe = re.sub(r"[^A-Z]", "", (nom_produit or "LOT").upper())[:4] or "LOT"
+    annee = datetime.utcnow().year
+    while True:
+        suffixe = secrets.token_hex(2).upper()
+        code = f"{prefixe}-{annee}-{suffixe}"
+        if not LotTracabilite.query.filter_by(code_lot=code).first():
+            return code
+
+
+@app.route("/api/producteurs/<int:producteur_id>/lots-tracabilite", methods=["POST"])
+def creer_lot_tracabilite(producteur_id):
+    Producteur.query.get_or_404(producteur_id)
+    data = request.get_json()
+    champs_requis = ["nom_produit", "quantite"]
+    manquants = [c for c in champs_requis if data.get(c) is None]
+    if manquants:
+        return jsonify({"erreur": f"Champs manquants: {', '.join(manquants)}"}), 400
+
+    date_recolte = None
+    if data.get("date_recolte"):
+        try:
+            date_recolte = datetime.strptime(data["date_recolte"], "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"erreur": "Format de date invalide (AAAA-MM-JJ attendu)"}), 400
+
+    lot = LotTracabilite(
+        code_lot=generer_code_lot(data["nom_produit"]),
+        producteur_id=producteur_id, produit_id=data.get("produit_id"),
+        nom_produit=data["nom_produit"], quantite=data["quantite"], unite=data.get("unite", "kg"),
+        origine_ville=data.get("origine_ville", ""), origine_pays=data.get("origine_pays", ""),
+        date_recolte=date_recolte, description=data.get("description", ""),
+    )
+    db.session.add(lot)
+    db.session.commit()
+    return jsonify({"message": "Lot créé, QR code généré", "lot": lot.to_dict()}), 201
+
+
+@app.route("/api/producteurs/<int:producteur_id>/lots-tracabilite", methods=["GET"])
+def lister_lots_producteur(producteur_id):
+    Producteur.query.get_or_404(producteur_id)
+    lots = LotTracabilite.query.filter_by(producteur_id=producteur_id).order_by(LotTracabilite.date_creation.desc()).all()
+    return jsonify([l.to_dict() for l in lots])
+
+
+@app.route("/api/lots-tracabilite/<string:code_lot>", methods=["GET"])
+def consulter_lot_tracabilite(code_lot):
+    """Consultation publique d'un lot en scannant son QR code (aucun compte requis).
+    Incrémente le compteur de scans et signale un scan suspect si le lot est déjà 'reçu'
+    mais continue d'être scanné de façon inhabituelle (indice possible de contrefaçon)."""
+    lot = LotTracabilite.query.filter_by(code_lot=code_lot).first()
+    if not lot:
+        return jsonify({"erreur": "Code de traçabilité introuvable. Ce produit n'est peut-être pas authentique."}), 404
+
+    lot.nombre_scans = (lot.nombre_scans or 0) + 1
+    db.session.commit()
+
+    resultat = lot.to_dict()
+    resultat["etapes"] = [e.to_dict() for e in lot.etapes]
+
+    deja_recu = any(e.type_etape == "reception" for e in lot.etapes)
+    if deja_recu and lot.nombre_scans > 20:
+        resultat["alerte_fraude"] = (
+            "⚠️ Ce code a déjà été vérifié un très grand nombre de fois après réception. "
+            "Vérifie l'authenticité du produit auprès du vendeur."
+        )
+
+    return jsonify(resultat)
+
+
+@app.route("/api/lots-tracabilite/<string:code_lot>/etapes", methods=["POST"])
+def ajouter_etape_tracabilite(code_lot):
+    lot = LotTracabilite.query.filter_by(code_lot=code_lot).first()
+    if not lot:
+        return jsonify({"erreur": "Code de traçabilité introuvable"}), 404
+
+    data = request.get_json()
+    type_etape = data.get("type_etape")
+    if type_etape not in EtapeTracabilite.TYPES_VALIDES:
+        return jsonify({"erreur": f"type_etape invalide. Options: {', '.join(EtapeTracabilite.TYPES_VALIDES)}"}), 400
+
+    etape = EtapeTracabilite(
+        lot_id=lot.id, type_etape=type_etape,
+        agent_nom=data.get("agent_nom", ""), agent_telephone=data.get("agent_telephone", ""),
+        latitude=data.get("latitude"), longitude=data.get("longitude"),
+        details=data.get("details", ""),
+    )
+    db.session.add(etape)
+    db.session.commit()
+
+    if lot.producteur:
+        envoyer_notification_push(
+            lot.producteur.push_token, "Nouvelle étape de traçabilité",
+            f"Ton lot {lot.code_lot} ({lot.nom_produit}) vient de passer l'étape : {type_etape}.",
+        )
+
+    return jsonify({"message": "Étape enregistrée", "etape": etape.to_dict()}), 201
 
 
 # ---------- ACHATS GROUPÉS ----------
