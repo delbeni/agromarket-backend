@@ -79,6 +79,12 @@ with app.app_context():
             "ALTER TABLE membres_tontine ADD COLUMN IF NOT EXISTS nom_complet_mobile_money VARCHAR(150)",
             "ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_url VARCHAR(255)",
             "ALTER TABLE courses_taxi ADD COLUMN IF NOT EXISTS vehicule_souhaite VARCHAR(20) DEFAULT 'peu_importe'",
+            "ALTER TABLE courses_taxi ADD COLUMN IF NOT EXISTS prix_contre_propose FLOAT",
+            "ALTER TABLE courses_taxi ADD COLUMN IF NOT EXISTS latitude_livreur FLOAT",
+            "ALTER TABLE courses_taxi ADD COLUMN IF NOT EXISTS longitude_livreur FLOAT",
+            "ALTER TABLE courses_taxi ADD COLUMN IF NOT EXISTS position_livreur_maj TIMESTAMP",
+            "ALTER TABLE commandes_nourriture ADD COLUMN IF NOT EXISTS latitude_livraison FLOAT",
+            "ALTER TABLE commandes_nourriture ADD COLUMN IF NOT EXISTS longitude_livraison FLOAT",
         ]
         from sqlalchemy import text as _sql_text
         with db.engine.connect() as _conn:
@@ -2917,8 +2923,26 @@ def accepter_course_taxi(course_id):
         return jsonify({"erreur": "livreur_id requis"}), 400
     course.livreur_id = data["livreur_id"]
     course.statut = "acceptee"
+    if data.get("prix_contre_propose") is not None:
+        course.prix_contre_propose = data["prix_contre_propose"]
     db.session.commit()
     return jsonify({"message": "Course acceptée", "course": course.to_dict()})
+
+
+@app.route("/api/courses-taxi/<int:course_id>/position", methods=["PUT"])
+def mettre_a_jour_position_course_taxi(course_id):
+    """Le chauffeur envoie sa position en direct pendant la course, pour que le client le suive sur la carte."""
+    course = CourseTaxi.query.get_or_404(course_id)
+    data = request.get_json()
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    if latitude is None or longitude is None:
+        return jsonify({"erreur": "latitude et longitude requis"}), 400
+    course.latitude_livreur = latitude
+    course.longitude_livreur = longitude
+    course.position_livreur_maj = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"message": "Position mise à jour"})
 
 
 @app.route("/api/courses-taxi/<int:course_id>/statut", methods=["PUT"])
@@ -3354,6 +3378,7 @@ def creer_commande_nourriture():
         restaurant_id=data["restaurant_id"],
         client_nom=data["client_nom"], client_telephone=data["client_telephone"],
         adresse_livraison=data["adresse_livraison"],
+        latitude_livraison=data.get("latitude_livraison"), longitude_livraison=data.get("longitude_livraison"),
         items=json.dumps(data["items"]), montant_total=montant_total,
         message=data.get("message", ""),
     )
