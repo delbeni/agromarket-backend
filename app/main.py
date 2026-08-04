@@ -86,6 +86,7 @@ with app.app_context():
             "ALTER TABLE commandes_nourriture ADD COLUMN IF NOT EXISTS latitude_livraison FLOAT",
             "ALTER TABLE commandes_nourriture ADD COLUMN IF NOT EXISTS longitude_livraison FLOAT",
             "ALTER TABLE courses_taxi ADD COLUMN IF NOT EXISTS paiement_statut VARCHAR(20) DEFAULT 'non_paye'",
+            "ALTER TABLE livreurs ADD COLUMN IF NOT EXISTS en_service BOOLEAN DEFAULT false",
         ]
         from sqlalchemy import text as _sql_text
         with db.engine.connect() as _conn:
