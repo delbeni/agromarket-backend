@@ -85,6 +85,7 @@ with app.app_context():
             "ALTER TABLE courses_taxi ADD COLUMN IF NOT EXISTS position_livreur_maj TIMESTAMP",
             "ALTER TABLE commandes_nourriture ADD COLUMN IF NOT EXISTS latitude_livraison FLOAT",
             "ALTER TABLE commandes_nourriture ADD COLUMN IF NOT EXISTS longitude_livraison FLOAT",
+            "ALTER TABLE courses_taxi ADD COLUMN IF NOT EXISTS paiement_statut VARCHAR(20) DEFAULT 'non_paye'",
         ]
         from sqlalchemy import text as _sql_text
         with db.engine.connect() as _conn:
@@ -2332,6 +2333,7 @@ PAYDUNYA_MODELES = {
     "commande": Commande,
     "commande_nourriture": CommandeNourriture,
     "reservation_hotel": ReservationHotel,
+    "course_taxi": CourseTaxi,
 }
 
 
@@ -2348,6 +2350,8 @@ def paydunya_initier_paiement():
     objet = modele.query.get_or_404(commande_id)
 
     montant = getattr(objet, "prix_total", None) or getattr(objet, "montant_total", None)
+    if montant is None and type_commande == "course_taxi":
+        montant = objet.prix_contre_propose or objet.prix_propose
     if not montant:
         return jsonify({"erreur": "Impossible de déterminer le montant à payer."}), 400
 
@@ -2409,9 +2413,25 @@ def paydunya_ipn():
             objet.statut = "en_preparation"
         elif type_commande == "reservation_hotel":
             objet.statut = "payee"
+        elif type_commande == "course_taxi":
+            objet.paiement_statut = "paye_bloque"
     db.session.commit()
 
     return jsonify({"message": "Paiement confirmé et commande mise à jour"}), 200
+
+
+@app.route("/api/courses-taxi/<int:course_id>/confirmer-reception", methods=["PUT"])
+def confirmer_reception_course_taxi(course_id):
+    """Le client confirme être bien arrivé à destination : le paiement bloqué est libéré au chauffeur."""
+    course = CourseTaxi.query.get_or_404(course_id)
+    if course.paiement_statut != "paye_bloque":
+        return jsonify({"erreur": "Aucun paiement en attente de libération pour cette course."}), 400
+    course.paiement_statut = "libere"
+    course.statut = "terminee"
+    db.session.commit()
+    if course.livreur:
+        envoyer_notification_push(course.livreur.push_token, "Paiement libéré", "Le client a confirmé être arrivé. Le paiement de la course t'est dû.")
+    return jsonify({"message": "Réception confirmée, paiement libéré", "course": course.to_dict()})
 
 
 @app.route("/api/commandes/<int:commande_id>/confirmer-reception", methods=["PUT"])
