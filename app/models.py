@@ -1091,6 +1091,8 @@ class CommandeNourriture(db.Model):
     client_nom = db.Column(db.String(120), nullable=False)
     client_telephone = db.Column(db.String(30), nullable=False)
     adresse_livraison = db.Column(db.String(255), nullable=False)
+    latitude_livraison = db.Column(db.Float)
+    longitude_livraison = db.Column(db.Float)
 
     items = db.Column(db.Text, nullable=False)  # JSON: [{"plat_id":.., "nom":.., "prix":.., "quantite":..}]
     montant_total = db.Column(db.Float, nullable=False)
@@ -1108,6 +1110,7 @@ class CommandeNourriture(db.Model):
             "livreur_id": self.livreur_id, "livreur_nom": self.livreur.nom if self.livreur else None,
             "client_nom": self.client_nom, "client_telephone": self.client_telephone,
             "adresse_livraison": self.adresse_livraison,
+            "latitude_livraison": self.latitude_livraison, "longitude_livraison": self.longitude_livraison,
             "items": json.loads(self.items) if self.items else [],
             "montant_total": self.montant_total, "message": self.message,
             "statut": self.statut, "date_creation": self.date_creation.isoformat(),
@@ -1449,8 +1452,13 @@ class CourseTaxi(db.Model):
     adresse_arrivee = db.Column(db.String(255), nullable=False)
 
     prix_propose = db.Column(db.Float)  # négocié à l'avance entre client et chauffeur, comme les frais de livraison
+    prix_contre_propose = db.Column(db.Float)  # si le chauffeur propose un autre prix à l'acceptation
     vehicule_souhaite = db.Column(db.String(20), default="peu_importe")  # moto / voiture / peu_importe
     statut = db.Column(db.String(20), default="en_attente")  # en_attente / acceptee / en_cours / terminee / annulee
+
+    latitude_livreur = db.Column(db.Float)
+    longitude_livreur = db.Column(db.Float)
+    position_livreur_maj = db.Column(db.DateTime)
     date_creation = db.Column(db.DateTime, default=datetime.utcnow)
 
     livreur = db.relationship("Livreur", backref="courses_taxi")
@@ -1463,7 +1471,11 @@ class CourseTaxi(db.Model):
             "client_nom": self.client_nom, "client_telephone": self.client_telephone,
             "latitude_depart": self.latitude_depart, "longitude_depart": self.longitude_depart, "adresse_depart": self.adresse_depart,
             "latitude_arrivee": self.latitude_arrivee, "longitude_arrivee": self.longitude_arrivee, "adresse_arrivee": self.adresse_arrivee,
-            "prix_propose": self.prix_propose, "vehicule_souhaite": self.vehicule_souhaite, "statut": self.statut, "date_creation": self.date_creation.isoformat(),
+            "prix_propose": self.prix_propose, "prix_contre_propose": self.prix_contre_propose,
+            "vehicule_souhaite": self.vehicule_souhaite, "statut": self.statut,
+            "latitude_livreur": self.latitude_livreur, "longitude_livreur": self.longitude_livreur,
+            "position_livreur_maj": self.position_livreur_maj.isoformat() if self.position_livreur_maj else None,
+            "date_creation": self.date_creation.isoformat(),
         }
 
 
