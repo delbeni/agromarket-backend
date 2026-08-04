@@ -2173,6 +2173,25 @@ def obtenir_conversation():
     return jsonify([m.to_dict() for m in messages])
 
 
+@app.route("/api/producteurs/<int:producteur_id>/conversations", methods=["GET"])
+def lister_conversations_producteur(producteur_id):
+    """Liste toutes les conversations (un acheteur = une conversation) reçues par ce producteur,
+    avec le dernier message de chacune — l'équivalent d'une boîte de réception."""
+    Producteur.query.get_or_404(producteur_id)
+    messages = Message.query.filter_by(producteur_id=producteur_id).order_by(Message.date_envoi.desc()).all()
+    conversations = {}
+    for m in messages:
+        if m.acheteur_id not in conversations:
+            conversations[m.acheteur_id] = {
+                "acheteur_id": m.acheteur_id,
+                "acheteur_nom": m.acheteur.nom if m.acheteur else "Acheteur",
+                "dernier_message": "🎤 Message vocal" if m.audio_url else m.contenu_filtre,
+                "date_dernier_message": m.date_envoi.isoformat(),
+                "produit_id": m.produit_id,
+            }
+    return jsonify(sorted(conversations.values(), key=lambda c: c["date_dernier_message"], reverse=True))
+
+
 # ---------- ADMINISTRATION ----------
 
 @app.route("/api/admin/producteurs", methods=["GET"])
