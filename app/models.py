@@ -585,6 +585,8 @@ class Livreur(db.Model):
     numero_permis_conduire = db.Column(db.String(50))
     permis_conduire_recto = db.Column(db.String(255))
     permis_conduire_verso = db.Column(db.String(255))
+
+    en_service = db.Column(db.Boolean, default=False)
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
     position_maj = db.Column(db.DateTime)
