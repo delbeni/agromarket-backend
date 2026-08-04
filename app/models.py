@@ -1459,6 +1459,7 @@ class CourseTaxi(db.Model):
     latitude_livreur = db.Column(db.Float)
     longitude_livreur = db.Column(db.Float)
     position_livreur_maj = db.Column(db.DateTime)
+    paiement_statut = db.Column(db.String(20), default="non_paye")  # non_paye / paye_bloque / libere
     date_creation = db.Column(db.DateTime, default=datetime.utcnow)
 
     livreur = db.relationship("Livreur", backref="courses_taxi")
@@ -1476,6 +1477,7 @@ class CourseTaxi(db.Model):
             "latitude_arrivee": self.latitude_arrivee, "longitude_arrivee": self.longitude_arrivee, "adresse_arrivee": self.adresse_arrivee,
             "prix_propose": self.prix_propose, "prix_contre_propose": self.prix_contre_propose,
             "vehicule_souhaite": self.vehicule_souhaite, "statut": self.statut,
+            "paiement_statut": self.paiement_statut,
             "latitude_livreur": self.latitude_livreur, "longitude_livreur": self.longitude_livreur,
             "position_livreur_maj": self.position_livreur_maj.isoformat() if self.position_livreur_maj else None,
             "date_creation": self.date_creation.isoformat(),
