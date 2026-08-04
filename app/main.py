@@ -22,7 +22,7 @@ import secrets
 import urllib.request
 import urllib.parse
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ---------- Configuration PayDunya ----------
 # Ces clés sont à définir en variables d'environnement sur Render (Dashboard > Environment).
@@ -2894,7 +2894,10 @@ def multiplicateur_demande_taxi():
     plus il y a de courses en attente par rapport aux chauffeurs disponibles, plus le prix monte."""
     vehicule = request.args.get("vehicule", "peu_importe")
     nombre_chauffeurs = Livreur.query.filter_by(en_service=True, actif=True).count()
-    query_attente = CourseTaxi.query.filter_by(statut="en_attente")
+    # On ne compte que les demandes récentes (30 dernières minutes) : une vieille commande de test
+    # jamais annulée ne doit pas fausser le calcul de la demande indéfiniment.
+    il_y_a_30_min = datetime.utcnow() - timedelta(minutes=30)
+    query_attente = CourseTaxi.query.filter(CourseTaxi.statut == "en_attente", CourseTaxi.date_creation >= il_y_a_30_min)
     nombre_demandes = query_attente.count()
 
     if nombre_chauffeurs == 0:
