@@ -365,6 +365,9 @@ def traduire_message():
         if not traduction.strip():
             return jsonify({"erreur": "Traduction vide, réessaie."}), 500
         return jsonify({"texte_traduit": traduction.strip()})
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        return jsonify({"erreur": f"[DEBUG TEMPORAIRE] HTTP {e.code}: {detail}"}), 500
     except Exception as e:
         return jsonify({"erreur": f"[DEBUG TEMPORAIRE] {type(e).__name__}: {str(e)}"}), 500
 
