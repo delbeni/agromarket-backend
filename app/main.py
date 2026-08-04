@@ -2867,6 +2867,45 @@ def passer_cycle_suivant_tontine(tontine_id):
 
 
 @app.route("/api/courses-taxi", methods=["POST"])
+@app.route("/api/taxi/multiplicateur-demande", methods=["GET"])
+def multiplicateur_demande_taxi():
+    """Calcule un multiplicateur de prix selon l'offre/demande en direct (comme InDrive/Uber) :
+    plus il y a de courses en attente par rapport aux chauffeurs disponibles, plus le prix monte."""
+    vehicule = request.args.get("vehicule", "peu_importe")
+    nombre_chauffeurs = Livreur.query.filter_by(en_service=True, actif=True).count()
+    query_attente = CourseTaxi.query.filter_by(statut="en_attente")
+    nombre_demandes = query_attente.count()
+
+    if nombre_chauffeurs == 0:
+        multiplicateur = 1.3  # aucun chauffeur en service : prix légèrement majoré pour inciter à commander quand même
+    else:
+        ratio = nombre_demandes / nombre_chauffeurs
+        if ratio >= 2:
+            multiplicateur = 1.6
+        elif ratio >= 1:
+            multiplicateur = 1.3
+        elif ratio >= 0.5:
+            multiplicateur = 1.0
+        else:
+            multiplicateur = 0.9  # peu de demande : petit prix réduit pour encourager les commandes
+
+    return jsonify({
+        "multiplicateur": multiplicateur,
+        "nombre_chauffeurs_disponibles": nombre_chauffeurs,
+        "nombre_demandes_en_attente": nombre_demandes,
+        "forte_demande": multiplicateur > 1.2,
+    })
+
+
+@app.route("/api/messages/<int:message_id>", methods=["DELETE"])
+def supprimer_message(message_id):
+    """Supprime un message envoyé (par erreur, ou pour toute autre raison)."""
+    message = Message.query.get_or_404(message_id)
+    db.session.delete(message)
+    db.session.commit()
+    return jsonify({"message": "Message supprimé"})
+
+
 def creer_course_taxi():
     data = request.get_json()
     champs_requis = ["client_nom", "client_telephone", "latitude_depart", "longitude_depart", "adresse_arrivee"]
